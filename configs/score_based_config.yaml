@@ -1,0 +1,53 @@
+# Model Configuration
+model:
+  in_channels: 3
+  model_channels: 64
+  image_size: 32
+  sigma_min: 0.01
+  sigma_max: 50.0
+  num_scales: 1000
+  beta: 1.0  # Temperature parameter for Langevin dynamics
+  langevin_steps: 10  # Steps per noise level during sampling
+  # Loss configuration
+  loss_type: 'score_matching'  # Options: 'score_matching', 'mse', 'l1', 'huber', 'hybrid'
+  loss_config:
+    # For score_matching loss
+    sigma_min: 0.01  # Minimum noise level
+    sigma_max: 50.0  # Maximum noise level
+    
+    # For other loss types
+    weights:  # Only used when loss_type is 'hybrid'
+      mse: 0.7
+      l1: 0.3
+    time_weights:  # Optional time-dependent weighting
+      type: 'linear'  # Options: 'linear', 'exponential', None
+      max_timesteps: 1000
+      beta: 0.1  # Only used for exponential weighting
+    reduction: 'mean'  # Options: 'mean', 'sum', 'none'
+
+# Training Configuration
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 2e-4
+  beta1: 0.9
+  beta2: 0.999
+  sample_interval: 5
+  checkpoint_interval: 10
+  num_workers: 4
+
+# Dataset Configuration
+dataset:
+  name: "mnist"
+  data_dir: "./data"
+  image_size: 32
+
+# Logging Configuration
+logging:
+  use_wandb: true
+  wandb_project: "diffusion-models"
+  output_dir: "outputs"
+
+# Device Configuration
+device:
+  cuda: true  # Set to false to use CPU 

@@ -1,0 +1,48 @@
+# Model Configuration
+model:
+  in_channels: 3
+  model_channels: 64
+  image_size: 32
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_timesteps: 1000
+  ddim_sampling_eta: 0.0  # 0 for deterministic sampling, >0 for stochastic
+  ddim_steps: 50  # Number of steps for DDIM sampling
+  # Loss configuration
+  loss_type: 'hybrid'  # Options: 'mse', 'l1', 'huber', 'hybrid'
+  loss_config:
+    weights:  # Only used when loss_type is 'hybrid'
+      mse: 0.5
+      l1: 0.5
+    time_weights:  # Optional time-dependent weighting
+      type: 'exponential'  # Options: 'linear', 'exponential', None
+      max_timesteps: 1000
+      beta: 0.1  # Controls decay rate for exponential weighting
+    reduction: 'mean'  # Options: 'mean', 'sum', 'none'
+
+# Training Configuration
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 2e-4
+  beta1: 0.9
+  beta2: 0.999
+  sample_interval: 5
+  checkpoint_interval: 10
+  num_workers: 4
+
+# Dataset Configuration
+dataset:
+  name: "mnist"
+  data_dir: "./data"
+  image_size: 32
+
+# Logging Configuration
+logging:
+  use_wandb: true
+  wandb_project: "diffusion-models"
+  output_dir: "outputs"
+
+# Device Configuration
+device:
+  cuda: true  # Set to false to use CPU 

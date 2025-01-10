@@ -1,0 +1,54 @@
+# Model Configuration
+model:
+  in_channels: 3
+  model_channels: 64
+  image_size: 32
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_timesteps: 1000
+  use_time_conditioning: true
+  langevin_steps: 10
+  langevin_step_size: 0.01
+  # Loss configuration
+  loss_type: 'energy_based'  # Options: 'energy_based', 'mse', 'l1', 'huber', 'hybrid'
+  loss_config:
+    # For energy_based loss
+    energy_scale: 1.0  # Scaling factor for energy values
+    regularization_weight: 0.1  # Weight for gradient penalty regularization
+    
+    # For other loss types
+    weights:  # Only used when loss_type is 'hybrid'
+      mse: 0.6
+      l1: 0.4
+    time_weights:  # Optional time-dependent weighting
+      type: 'exponential'  # Options: 'linear', 'exponential', None
+      max_timesteps: 1000
+      beta: 0.1  # Only used for exponential weighting
+    reduction: 'mean'  # Options: 'mean', 'sum', 'none'
+
+# Training Configuration
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 2e-4
+  beta1: 0.9
+  beta2: 0.999
+  sample_interval: 5
+  checkpoint_interval: 10
+  num_workers: 4
+
+# Dataset Configuration
+dataset:
+  name: "mnist"
+  data_dir: "./data"
+  image_size: 32
+
+# Logging Configuration
+logging:
+  use_wandb: true
+  wandb_project: "diffusion-models"
+  output_dir: "outputs"
+
+# Device Configuration
+device:
+  cuda: true  # Set to false to use CPU 
