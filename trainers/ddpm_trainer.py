@@ -30,6 +30,8 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional
 import time
 
+from utils.config_utils import print_config
+
 class DDPMTrainer:
     """Trainer class for DDPM models.
     
@@ -135,6 +137,29 @@ class DDPMTrainer:
         
         # Setup learning rate scheduler
         scheduler_config = config.get('training', {}).get('scheduler', {})
+        
+        # Print scheduler configuration if on rank 0
+        if self.rank == 0:
+            if scheduler_config:
+                print_config("Scheduler Configuration", scheduler_config)
+                # Log scheduler config to wandb if enabled
+                if config.get('use_wandb', False):
+                    wandb.config.update({
+                        'scheduler': {
+                            'type': scheduler_config.get('type', 'cosine'),
+                            'warmup_steps': scheduler_config.get('warmup_steps', 0),
+                            'min_lr': scheduler_config.get('min_lr', 1e-6),
+                            'cycle_length': scheduler_config.get('cycle_length', 50),
+                            'cycle_mult': scheduler_config.get('cycle_mult', 2),
+                            'step_size': scheduler_config.get('step_size', 100),
+                            'gamma': scheduler_config.get('gamma', 0.1)
+                        }
+                    })
+            else:
+                print("No scheduler configuration found. Training will proceed without a learning rate scheduler.")
+                if config.get('use_wandb', False):
+                    wandb.config.update({'scheduler': None})
+        
         if scheduler_config:
             scheduler_type = scheduler_config.get('type', 'cosine')
             warmup_steps = scheduler_config.get('warmup_steps', 0)
@@ -176,6 +201,8 @@ class DDPMTrainer:
                     print(f"Warning: Unknown scheduler type '{scheduler_type}'. No scheduler will be used.")
         else:
             self.scheduler = None
+            if self.rank == 0:
+                print("No scheduler configuration found. Training will proceed without a learning rate scheduler.")
         
         # Setup data loaders
         self.train_loader = train_loader
@@ -497,6 +524,7 @@ class DDPMTrainer:
                         
                         # Log additional metrics periodically
                         if global_step % self.config.get('logging', {}).get('gradient_logging_freq', 100) == 0:
+                            print("Logging model gradients and optimizer stats...")
                             self._log_model_gradients(global_step)
                             self._log_optimizer_stats(global_step)
                             model = self.model.module if self.is_distributed else self.model
