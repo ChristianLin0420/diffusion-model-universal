@@ -542,7 +542,19 @@ class DDPM(BaseDiffusion):
         # Use flexible loss function with timestep information
         return self.loss_fn(noise_pred, noise, t)
     
-    def sample(self, batch_size: int, device: torch.device) -> torch.Tensor:
+    def sample(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Generate samples through the reverse diffusion process.
+        
+        Args:
+            x (torch.Tensor): Input noise tensor of shape [B, C, H, W].
+            t (torch.Tensor): Current timestep tensor of shape [B].
+        
+        Returns:
+            torch.Tensor: Denoised samples of shape [B, C, H, W].
+        """
+        return self._reverse_diffusion_step(x, t)
+    
+    def generate_samples(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Generate samples through the reverse diffusion process.
         
         Args:
@@ -561,6 +573,35 @@ class DDPM(BaseDiffusion):
             x = self._reverse_diffusion_step(x, t_batch)
             
         return x
+    
+    def generate_samples_with_intermediates(self, batch_size: int, device: torch.device, save_interval: int = 100) -> torch.Tensor:
+        """Generate samples through the reverse diffusion process and return intermediate states.
+        
+        Args:
+            batch_size (int): Number of samples to generate.
+            device (torch.device): Device to generate samples on.
+            save_interval (int): Interval at which to save intermediate states.
+        
+        Returns:
+            List[torch.Tensor]: List of tensors containing the initial noise and intermediate states.
+        """
+        shape = (batch_size, self.config['image_channels'], 
+                self.config['image_size'], self.config['image_size'])
+        x = torch.randn(shape, device=device)
+        
+        # Store intermediate samples
+        intermediate_samples = [x.clone()]  # Start with initial noise
+        
+        # Generate samples with intermediate steps
+        for t in reversed(range(self.num_timesteps)):
+            t_batch = torch.tensor([t], device=device).repeat(batch_size)
+            x = self._reverse_diffusion_step(x, t_batch)
+            
+            # Save intermediate result if it's a save timestep
+            if t % save_interval == 0 or t == 0:  # Also save the final result
+                intermediate_samples.append(x.clone())
+        
+        return intermediate_samples
     
     def _add_noise(self, x: torch.Tensor, t: torch.Tensor, 
                   noise: Optional[torch.Tensor] = None) -> torch.Tensor:

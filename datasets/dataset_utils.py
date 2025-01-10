@@ -9,7 +9,7 @@ import torchvision.transforms as T
 from pathlib import Path
 from torch.utils.data.distributed import DistributedSampler
 
-from . import DATASET_REGISTRY
+from .registry import DATASET_REGISTRY
 from utils.config_utils import load_data_config, print_config
 
 def create_transforms(transform_configs, mean, std, is_train=False):

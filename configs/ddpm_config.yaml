@@ -17,7 +17,7 @@ model_config:
 # Training Configuration
 training:
   num_epochs: 500
-  batch_size: 128
+  batch_size: 512
   learning_rate: 2e-4
   beta1: 0.9
   beta2: 0.999
@@ -31,7 +31,7 @@ training:
     cycle_length: 50  # For cosine scheduler with restarts (in epochs)
     cycle_mult: 2  # Multiply cycle length by this factor after each restart
   val_interval: 1000  # Steps between validation
-  sample_interval: 5  # Epochs between sample generation
+  sample_interval: 1  # Epochs between sample generation
   checkpoint_interval: 10  # Epochs between checkpoints
 
 # Data Configuration

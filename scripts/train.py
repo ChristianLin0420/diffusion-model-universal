@@ -112,7 +112,7 @@ def train_process(rank: int, world_size: int, args: argparse.Namespace):
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
-        config={**config['model_config'], **config['training'], **config['logging']},
+        config=config,
         device=device,
         rank=rank,
         world_size=world_size

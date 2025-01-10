@@ -142,23 +142,6 @@ class DDPMTrainer:
         if self.rank == 0:
             if scheduler_config:
                 print_config("Scheduler Configuration", scheduler_config)
-                # Log scheduler config to wandb if enabled
-                if config.get('use_wandb', False):
-                    wandb.config.update({
-                        'scheduler': {
-                            'type': scheduler_config.get('type', 'cosine'),
-                            'warmup_steps': scheduler_config.get('warmup_steps', 0),
-                            'min_lr': scheduler_config.get('min_lr', 1e-6),
-                            'cycle_length': scheduler_config.get('cycle_length', 50),
-                            'cycle_mult': scheduler_config.get('cycle_mult', 2),
-                            'step_size': scheduler_config.get('step_size', 100),
-                            'gamma': scheduler_config.get('gamma', 0.1)
-                        }
-                    })
-            else:
-                print("No scheduler configuration found. Training will proceed without a learning rate scheduler.")
-                if config.get('use_wandb', False):
-                    wandb.config.update({'scheduler': None})
         
         if scheduler_config:
             scheduler_type = scheduler_config.get('type', 'cosine')
@@ -222,7 +205,7 @@ class DDPMTrainer:
                 os.makedirs(self.log_dir, exist_ok=True)
                 
                 # Initialize wandb if enabled
-                if config.get('use_wandb', False):
+                if config.get('logging', {}).get('use_wandb', False):
                     wandb.init(
                         project=config.get('wandb_project', 'diffusion-models'),
                         name=f"{self.model_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -238,6 +221,22 @@ class DDPMTrainer:
                             'device': str(device)
                         }
                     )
+                    
+                    # Update wandb config with scheduler settings if present
+                    if scheduler_config:
+                        wandb.config.update({
+                            'scheduler': {
+                                'type': scheduler_config.get('type', 'cosine'),
+                                'warmup_steps': scheduler_config.get('warmup_steps', 0),
+                                'min_lr': scheduler_config.get('min_lr', 1e-6),
+                                'cycle_length': scheduler_config.get('cycle_length', 50),
+                                'cycle_mult': scheduler_config.get('cycle_mult', 2),
+                                'step_size': scheduler_config.get('step_size', 100),
+                                'gamma': scheduler_config.get('gamma', 0.1)
+                            }
+                        }, allow_val_change=True)
+                    else:
+                        wandb.config.update({'scheduler': None}, allow_val_change=True)
                 
                 # Initialize TensorBoard if enabled
                 if config.get('use_tensorboard', False):
@@ -282,7 +281,7 @@ class DDPMTrainer:
             })
         
         # Log to wandb if enabled
-        if self.config.get('use_wandb', False):
+        if self.config.get('logging', {}).get('use_wandb', False):
             wandb.log(metrics, step=step)
         
         # Log to tensorboard if enabled
@@ -328,7 +327,7 @@ class DDPMTrainer:
         total_weight_norm = sum(norm * norm for norm in weight_norms.values()) ** 0.5
         
         # Log to wandb
-        if self.config.get('use_wandb', False):
+        if self.config.get('logging', {}).get('use_wandb', False):
             wandb.log({
                 "model/total_grad_norm": total_grad_norm,
                 "model/total_weight_norm": total_weight_norm,
@@ -336,7 +335,7 @@ class DDPMTrainer:
                 "model/weight_norms": weight_norms,
                 "model/param_histograms": {
                     **{k: wandb.Histogram(v) for k, v in grad_hist.items()},
-                    **{k: wandb.Histogram(v) for k, v in weight_hist.items()}
+                    **{k: wandb.Histogram(v.detach()) for k, v in weight_hist.items()}
                 }
             }, step=step)
     
@@ -507,7 +506,7 @@ class DDPMTrainer:
                     num_batches += 1
                     
                     # Log detailed training metrics
-                    if self.rank == 0 and self.config.get('use_wandb', False):
+                    if self.rank == 0 and self.config.get('logging', {}).get('use_wandb', False):
                         # Get current learning rate
                         current_lr = self.optimizer.param_groups[0]['lr']
                         
@@ -521,10 +520,9 @@ class DDPMTrainer:
                         
                         # Log metrics
                         self._log_metrics(train_metrics, step=global_step)
-                        
+    
                         # Log additional metrics periodically
                         if global_step % self.config.get('logging', {}).get('gradient_logging_freq', 100) == 0:
-                            print("Logging model gradients and optimizer stats...")
                             self._log_model_gradients(global_step)
                             self._log_optimizer_stats(global_step)
                             model = self.model.module if self.is_distributed else self.model
@@ -552,7 +550,7 @@ class DDPMTrainer:
                             self._log_metrics(metrics, step=global_step, prefix='validation')
                         
                         # Save best model on rank 0
-                        if self.rank == 0 and val_loss < self.best_val_loss:
+                        if self.rank == 0 and val_loss < self.best_val_loss and (global_step % (self.config.get('training', {}).get('checkpoint_interval', 10) * steps_per_epoch) == 0):
                             self.best_val_loss = val_loss
                             self.save_checkpoint(epoch + 1, is_best=True)
                     
@@ -588,11 +586,11 @@ class DDPMTrainer:
                     self._log_metrics(metrics, step=global_step, prefix='train')
                     
                     # Generate and save samples
-                    if (epoch + 1) % self.config.get('sample_interval', 5) == 0:
+                    if (epoch + 1) % self.config.get('training', {}).get('sample_interval', 5) == 0:
                         self.generate_samples(epoch + 1)
                     
                     # Save checkpoint
-                    if (epoch + 1) % self.config.get('checkpoint_interval', 10) == 0:
+                    if (epoch + 1) % self.config.get('training', {}).get('checkpoint_interval', 10) == 0:
                         self.save_checkpoint(epoch + 1)
         
         except Exception as e:
@@ -713,7 +711,7 @@ class DDPMTrainer:
             test_loss = total_loss / num_batches if num_batches > 0 else float('inf')
             
             # Log test metrics on rank 0
-            if self.rank == 0 and self.config.get('use_wandb', False):
+            if self.rank == 0 and self.config.get('logging', {}).get('use_wandb', False):
                 wandb.log({
                     'test_loss': test_loss
                 })
@@ -724,46 +722,60 @@ class DDPMTrainer:
             print(f"Error during testing: {str(e)}")
             return float('inf')
     
-    def generate_samples(self, epoch: int, num_samples: int = 16):
+    def generate_samples(self, epoch: int, num_samples: int = 8):
         """Generate and save samples using the DDPM model.
         
-        Uses the model's sampling process to generate new images. The samples
-        are saved to the samples directory with the epoch number in the filename.
-        In distributed mode, this only runs on rank 0 to avoid duplicate samples.
+        Uses the model's sampling process to generate new images. For each sample,
+        shows the progression from noise to final image at different timesteps.
+        The samples are arranged in a grid where each row shows the denoising
+        process for one sample.
         
         Args:
             epoch (int): Current epoch number.
                 Used for naming the output file.
             num_samples (int, optional): Number of samples to generate.
-                Should be a perfect square for grid visualization.
-                Defaults to 16.
+                This will be the number of rows in the grid. Defaults to 8.
         """
         if self.rank != 0:
             return
             
         self.model.eval()
         with torch.no_grad():
-            # Generate samples
-            if self.is_distributed:
-                samples = self.model.module.sample(num_samples, self.device)
-            else:
-                samples = self.model.sample(num_samples, self.device)
+            # Get model (handle DDP case)
+            model = self.model.module if self.is_distributed else self.model
             
-            # Create grid and save
-            grid = make_grid(samples, nrow=int(num_samples ** 0.5))
+            # Generate samples with intermediate steps
+            intermediate_samples = model.generate_samples_with_intermediates(
+                batch_size=num_samples,
+                device=self.device,
+                save_interval=100
+            )
+            
+            # Create grid
+            # Reshape samples to create rows of denoising process
+            rows = []
+            for i in range(num_samples):
+                row = [sample[i:i+1] for sample in intermediate_samples]
+                rows.append(torch.cat(row, dim=0))
+            
+            # Combine all rows
+            all_samples = torch.cat(rows, dim=0)
+            
+            # Create and save grid
+            grid = make_grid(all_samples, nrow=11, padding=2)  # 11 images per row (noise + 10 intermediate steps)
             save_path = os.path.join(self.sample_dir, f'samples_epoch_{epoch}.png')
             save_image(grid, save_path)
             
             # Log samples
-            if self.config.get('use_wandb', False):
+            if self.config.get('logging', {}).get('use_wandb', False):
                 wandb.log({
-                    f'{self.model_name}/samples': wandb.Image(grid),
+                    f'{self.model_name}/denoising_process': wandb.Image(grid),
                     'epoch': epoch
                 })
             
             if self.writer is not None:
                 self.writer.add_image(
-                    f'{self.model_name}/samples',
+                    f'{self.model_name}/denoising_process',
                     grid,
                     global_step=epoch
                 )
@@ -809,7 +821,7 @@ class DDPMTrainer:
             torch.save(checkpoint, best_path)
         
         # Log to wandb if enabled
-        if self.config.get('use_wandb', False):
+        if self.config.get('logging', {}).get('use_wandb', False):
             wandb.save(path)
             if is_best:
                 wandb.save(best_path)
@@ -847,7 +859,7 @@ class DDPMTrainer:
         when training is complete or if an error occurs.
         """
         if self.rank == 0:
-            if self.config.get('use_wandb', False):
+            if self.config.get('logging', {}).get('use_wandb', False):
                 wandb.finish()
             if self.writer is not None:
                 self.writer.close()
