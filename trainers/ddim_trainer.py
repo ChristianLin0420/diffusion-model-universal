@@ -11,6 +11,7 @@ Key Features:
     - Faster sampling than DDPM
     - Compatible with DDPM checkpoints
     - Train/val/test split support
+    - Multi-GPU training support
 """
 
 import torch
@@ -46,6 +47,10 @@ class DDIMTrainer(DDPMTrainer):
             - ddim_sampling_eta (float): DDIM sampling parameter
             - ddim_steps (int): Number of DDIM sampling steps
         device (torch.device): Device to train on (CPU/GPU).
+        rank (int, optional): Process rank for distributed training.
+            Defaults to 0 (single GPU training).
+        world_size (int, optional): Total number of processes.
+            Defaults to 1 (single GPU training).
     
     Attributes:
         Inherits all attributes from DDPMTrainer.
@@ -56,7 +61,7 @@ class DDIMTrainer(DDPMTrainer):
         
         Uses DDIM's deterministic sampling process to generate samples,
         which is typically faster than DDPM sampling due to requiring
-        fewer steps.
+        fewer steps. Only runs on rank 0 in distributed mode.
         
         Args:
             epoch (int): Current epoch number.
@@ -64,10 +69,16 @@ class DDIMTrainer(DDPMTrainer):
             num_samples (int, optional): Number of samples to generate.
                 Should be a perfect square. Defaults to 16.
         """
+        if self.rank != 0:
+            return
+            
         self.model.eval()
         with torch.no_grad():
             # Use DDIM-specific sampling
-            samples = self.model.sample(num_samples, self.device)
+            if self.is_distributed:
+                samples = self.model.module.sample(num_samples, self.device)
+            else:
+                samples = self.model.sample(num_samples, self.device)
             
             # Save samples using parent class method
             self._save_samples(samples, epoch) 

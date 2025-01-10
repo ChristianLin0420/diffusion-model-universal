@@ -1,48 +1,75 @@
+# DDIM Model Configuration
+
 # Model Configuration
-model:
-  in_channels: 3
-  model_channels: 64
-  image_size: 32
+model_name: "DDIM"  # Name of the model for logging
+model_config:
+  time_steps: 1000
   beta_start: 0.0001
   beta_end: 0.02
-  num_timesteps: 1000
-  ddim_sampling_eta: 0.0  # 0 for deterministic sampling, >0 for stochastic
-  ddim_steps: 50  # Number of steps for DDIM sampling
-  # Loss configuration
-  loss_type: 'hybrid'  # Options: 'mse', 'l1', 'huber', 'hybrid'
-  loss_config:
-    weights:  # Only used when loss_type is 'hybrid'
-      mse: 0.5
-      l1: 0.5
-    time_weights:  # Optional time-dependent weighting
-      type: 'exponential'  # Options: 'linear', 'exponential', None
-      max_timesteps: 1000
-      beta: 0.1  # Controls decay rate for exponential weighting
-    reduction: 'mean'  # Options: 'mean', 'sum', 'none'
+  image_size: 32
+  image_channels: 3
+  hidden_channels: 128
+  channel_multipliers: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attention_resolutions: [16]
+  dropout: 0.1
+  ddim_sampling_eta: 0.0  # DDIM-specific parameter
+  ddim_steps: 50  # Number of DDIM sampling steps
 
 # Training Configuration
 training:
-  batch_size: 32
-  num_epochs: 100
+  num_epochs: 500
+  batch_size: 64
   learning_rate: 2e-4
   beta1: 0.9
   beta2: 0.999
-  sample_interval: 5
-  checkpoint_interval: 10
-  num_workers: 4
+  ema_decay: 0.9999
+  val_interval: 1000  # Steps between validation
+  sample_interval: 5  # Epochs between sample generation
+  checkpoint_interval: 10  # Epochs between checkpoints
 
-# Dataset Configuration
-dataset:
-  name: "mnist"
-  data_dir: "./data"
+# Data Configuration
+data:
+  dataset: "CIFAR10"  # Dataset name for logging
   image_size: 32
+  channels: 3
+  data_dir: "data"
+  num_workers: 4
 
 # Logging Configuration
 logging:
+  # Weights & Biases Configuration
   use_wandb: true
   wandb_project: "diffusion-models"
-  output_dir: "outputs"
+  wandb_entity: null  # Your wandb username/entity
+  group: "${data.dataset}_comparison"  # Dataset-specific group for comparing models
+  tags: ["ddim", "fast_sampling", "${data.dataset}"]  # Tags for organizing runs
+  notes: "DDIM model with fast sampling on ${data.dataset}"  # Run description
+  
+  # TensorBoard Configuration
+  use_tensorboard: true
+  tensorboard_dir: "logs"
+  
+  # Metric Tracking
+  track_grad_norm: true  # Track gradient norms
+  track_memory_usage: true  # Track GPU memory usage
+  track_samples: true  # Track generated samples
+  sample_visualization_frequency: 1000  # Steps between sample visualizations
+  
+  # DDIM-specific Tracking
+  track_sampling_steps: true  # Track number of sampling steps
+  track_sampling_time: true  # Track sampling time
 
-# Device Configuration
-device:
-  cuda: true  # Set to false to use CPU 
+# Output Configuration
+output:
+  output_dir: "outputs/ddim"
+  save_model: true
+  save_optimizer: true
+  save_best: true
+  save_last: true
+  save_frequency: 10  # Save every N epochs
+
+# Distributed Training
+distributed:
+  backend: "nccl"
+  find_unused_parameters: true 

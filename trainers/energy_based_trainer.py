@@ -11,6 +11,7 @@ Key Features:
     - Regularization parameter tracking
     - Langevin dynamics parameter monitoring
     - Train/val/test split support
+    - Multi-GPU training support
 """
 
 import torch
@@ -48,6 +49,10 @@ class EnergyBasedTrainer(DDPMTrainer):
             - langevin_steps (int): Number of Langevin steps
             - langevin_step_size (float): Step size for Langevin dynamics
         device (torch.device): Device to train on (CPU/GPU).
+        rank (int, optional): Process rank for distributed training.
+            Defaults to 0 (single GPU training).
+        world_size (int, optional): Total number of processes.
+            Defaults to 1 (single GPU training).
     
     Attributes:
         Inherits all attributes from DDPMTrainer, plus:
@@ -61,7 +66,7 @@ class EnergyBasedTrainer(DDPMTrainer):
         
         Uses annealed Langevin dynamics to generate samples, which involves
         running multiple steps of Langevin MCMC with an energy-based model
-        at decreasing noise levels.
+        at decreasing noise levels. Only runs on rank 0 in distributed mode.
         
         Args:
             epoch (int): Current epoch number.
@@ -69,10 +74,16 @@ class EnergyBasedTrainer(DDPMTrainer):
             num_samples (int, optional): Number of samples to generate.
                 Should be a perfect square. Defaults to 16.
         """
+        if self.rank != 0:
+            return
+            
         self.model.eval()
         with torch.no_grad():
             # Use energy-based sampling with annealed Langevin dynamics
-            samples = self.model.sample(num_samples, self.device)
+            if self.is_distributed:
+                samples = self.model.module.sample(num_samples, self.device)
+            else:
+                samples = self.model.sample(num_samples, self.device)
             
             # Save samples using parent class method
             self._save_samples(samples, epoch)
@@ -82,7 +93,7 @@ class EnergyBasedTrainer(DDPMTrainer):
         
         In addition to the base metrics, logs the energy scale, regularization
         weight, and Langevin dynamics parameters to track their values during
-        training. Also logs validation metrics when available.
+        training. Only logs on rank 0 in distributed mode.
         
         Args:
             loss (torch.Tensor): Current training loss.
@@ -92,11 +103,12 @@ class EnergyBasedTrainer(DDPMTrainer):
         """
         super()._log_additional_metrics(loss, epoch)
         
-        if self.config.get('use_wandb', False):
+        if self.rank == 0 and self.config.get('use_wandb', False):
             import wandb
             # Log energy model parameters
+            model = self.model.module if self.is_distributed else self.model
             wandb.log({
-                'energy_scale': self.model.loss_fn.energy_scale,
-                'regularization_weight': self.model.loss_fn.regularization_weight,
-                'langevin_step_size': self.model.langevin_step_size
+                'energy_scale': model.loss_fn.energy_scale,
+                'regularization_weight': model.loss_fn.regularization_weight,
+                'langevin_step_size': model.langevin_step_size
             }, step=epoch) 

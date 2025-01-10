@@ -1,54 +1,84 @@
+# Energy-based Model Configuration
+
 # Model Configuration
-model:
-  in_channels: 3
-  model_channels: 64
-  image_size: 32
-  beta_start: 0.0001
-  beta_end: 0.02
-  num_timesteps: 1000
-  use_time_conditioning: true
+model_name: "EnergyBasedDiffusion"  # Name of the model for logging
+model_config:
+  energy_scale: 1.0
+  regularization_weight: 0.01
   langevin_steps: 10
   langevin_step_size: 0.01
-  # Loss configuration
-  loss_type: 'energy_based'  # Options: 'energy_based', 'mse', 'l1', 'huber', 'hybrid'
-  loss_config:
-    # For energy_based loss
-    energy_scale: 1.0  # Scaling factor for energy values
-    regularization_weight: 0.1  # Weight for gradient penalty regularization
-    
-    # For other loss types
-    weights:  # Only used when loss_type is 'hybrid'
-      mse: 0.6
-      l1: 0.4
-    time_weights:  # Optional time-dependent weighting
-      type: 'exponential'  # Options: 'linear', 'exponential', None
-      max_timesteps: 1000
-      beta: 0.1  # Only used for exponential weighting
-    reduction: 'mean'  # Options: 'mean', 'sum', 'none'
+  image_size: 32
+  image_channels: 3
+  hidden_channels: 128
+  channel_multipliers: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attention_resolutions: [16]
+  dropout: 0.1
+  ema_rate: 0.999
+  noise_schedule:
+    type: "linear"  # Options: linear, cosine, quadratic
+    beta_start: 0.0001
+    beta_end: 0.02
+    timesteps: 1000
 
 # Training Configuration
 training:
-  batch_size: 32
-  num_epochs: 100
+  num_epochs: 500
+  batch_size: 64
   learning_rate: 2e-4
   beta1: 0.9
   beta2: 0.999
-  sample_interval: 5
-  checkpoint_interval: 10
-  num_workers: 4
+  ema_decay: 0.9999
+  val_interval: 1000  # Steps between validation
+  sample_interval: 5  # Epochs between sample generation
+  checkpoint_interval: 10  # Epochs between checkpoints
+  grad_clip: 1.0  # Gradient clipping value
+  mcmc_steps_per_iter: 5  # MCMC steps per training iteration
 
-# Dataset Configuration
-dataset:
-  name: "mnist"
-  data_dir: "./data"
+# Data Configuration
+data:
+  dataset: "CIFAR10"  # Dataset name for logging
   image_size: 32
+  channels: 3
+  data_dir: "data"
+  num_workers: 4
 
 # Logging Configuration
 logging:
+  # Weights & Biases Configuration
   use_wandb: true
   wandb_project: "diffusion-models"
-  output_dir: "outputs"
+  wandb_entity: null  # Your wandb username/entity
+  group: "${data.dataset}_comparison"  # Dataset-specific group for comparing models
+  tags: ["energy_based", "mcmc", "${data.dataset}"]  # Tags for organizing runs
+  notes: "Energy-based model with MCMC sampling on ${data.dataset}"  # Run description
+  
+  # TensorBoard Configuration
+  use_tensorboard: true
+  tensorboard_dir: "logs"
+  
+  # Metric Tracking
+  track_grad_norm: true  # Track gradient norms
+  track_memory_usage: true  # Track GPU memory usage
+  track_samples: true  # Track generated samples
+  sample_visualization_frequency: 1000  # Steps between sample visualizations
+  
+  # Energy-based Specific Tracking
+  track_energy_values: true  # Track energy function values
+  track_mcmc_acceptance: true  # Track MCMC acceptance rates
+  track_langevin_dynamics: true  # Track Langevin dynamics statistics
+  track_regularization: true  # Track regularization terms
 
-# Device Configuration
-device:
-  cuda: true  # Set to false to use CPU 
+# Output Configuration
+output:
+  output_dir: "outputs/energy_based"
+  save_model: true
+  save_optimizer: true
+  save_best: true
+  save_last: true
+  save_frequency: 10  # Save every N epochs
+
+# Distributed Training
+distributed:
+  backend: "nccl"
+  find_unused_parameters: true 

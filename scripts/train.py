@@ -13,13 +13,21 @@ Key Features:
     - Checkpoint saving and loading
     - Device (CPU/GPU) configuration
     - Training progress logging
+    - Model benchmarking
+    - Multi-GPU training support
 """
 
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import yaml
 import argparse
 from pathlib import Path
 import sys
+import json
+import os
 
 # Add project root to path
 project_root = str(Path(__file__).parent.parent)
@@ -28,6 +36,7 @@ sys.path.append(project_root)
 from models import DDPM, DDIM, ScoreBasedDiffusion, EnergyBasedDiffusion
 from datasets import DATASET_REGISTRY
 from trainers import TRAINER_REGISTRY
+from utils.benchmarks import DiffusionBenchmark
 
 # Model registry
 MODEL_REGISTRY = {
@@ -54,7 +63,7 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def get_dataset(config: dict):
+def get_dataset(config: dict, world_size: int = 1, rank: int = 0):
     """Get dataset based on configuration.
     
     Creates and returns a dataset instance based on the configuration.
@@ -65,6 +74,8 @@ def get_dataset(config: dict):
             - dataset: Dataset configuration with name, data_dir, image_size
             - training: Training configuration with batch_size, num_workers
             - val_split: Validation split ratio (for datasets that need splitting)
+        world_size (int): Total number of processes for distributed training.
+        rank (int): Process rank for distributed training.
     
     Returns:
         Dataset: Instantiated dataset object.
@@ -78,56 +89,107 @@ def get_dataset(config: dict):
     if dataset_class is None:
         raise ValueError(f"Unsupported dataset: {dataset_name}. Available datasets: {list(DATASET_REGISTRY.keys())}")
     
-    return dataset_class(
+    dataset = dataset_class(
         data_dir=config['dataset']['data_dir'],
         image_size=config['dataset']['image_size'],
         batch_size=config['training']['batch_size'],
         num_workers=config['training']['num_workers'],
         val_split=config['dataset'].get('val_split', 0.1)  # Default to 10% validation
     )
+    
+    # Create distributed samplers if using distributed training
+    if world_size > 1:
+        train_sampler = DistributedSampler(
+            dataset.train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+        val_sampler = DistributedSampler(
+            dataset.val_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=False
+        )
+        test_sampler = DistributedSampler(
+            dataset.test_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=False
+        )
+        
+        # Update dataloaders with samplers
+        train_loader = torch.utils.data.DataLoader(
+            dataset.train_dataset,
+            batch_size=config['training']['batch_size'],
+            sampler=train_sampler,
+            num_workers=config['training']['num_workers'],
+            pin_memory=True
+        )
+        val_loader = torch.utils.data.DataLoader(
+            dataset.val_dataset,
+            batch_size=config['training']['batch_size'],
+            sampler=val_sampler,
+            num_workers=config['training']['num_workers'],
+            pin_memory=True
+        )
+        test_loader = torch.utils.data.DataLoader(
+            dataset.test_dataset,
+            batch_size=config['training']['batch_size'],
+            sampler=test_sampler,
+            num_workers=config['training']['num_workers'],
+            pin_memory=True
+        )
+        
+        return train_loader, val_loader, test_loader
+    
+    return dataset.get_dataloaders()
 
-def main():
-    """Main training function.
+def setup_distributed(rank: int, world_size: int):
+    """Set up distributed training environment.
     
-    Parses command-line arguments, sets up the model, dataset, and trainer,
-    and runs the training loop. Supports resuming training from checkpoints.
-    
-    Command-line Arguments:
-        --config (str): Path to the configuration file.
-        --model_type (str): Type of diffusion model to train.
-            Must be one of: ddpm, ddim, score_based, energy_based.
-        --resume (str, optional): Path to checkpoint to resume training from.
-        --eval_only (bool, optional): Only run evaluation on test set.
-    
-    The function performs the following steps:
-    1. Parse command-line arguments
-    2. Load configuration from YAML file
-    3. Set up device (CPU/GPU)
-    4. Create dataset and dataloaders
-    5. Initialize model and trainer
-    6. Resume from checkpoint if specified
-    7. Run training loop or evaluation
+    Args:
+        rank (int): Process rank.
+        world_size (int): Total number of processes.
     """
-    # Parse arguments
-    parser = argparse.ArgumentParser(description='Train diffusion models')
-    parser.add_argument('--config', type=str, required=True, help='Path to config file')
-    parser.add_argument('--model_type', type=str, required=True,
-                      choices=list(MODEL_REGISTRY.keys()),
-                      help='Type of diffusion model to train')
-    parser.add_argument('--resume', type=str, help='Path to checkpoint to resume from')
-    parser.add_argument('--eval_only', action='store_true', help='Only run evaluation')
-    args = parser.parse_args()
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    # Initialize process group
+    dist.init_process_group(
+        backend='nccl',
+        init_method='env://',
+        world_size=world_size,
+        rank=rank
+    )
+    
+    # Set device for this process
+    torch.cuda.set_device(rank)
+
+def cleanup_distributed():
+    """Clean up distributed training environment."""
+    dist.destroy_process_group()
+
+def train_process(rank: int, world_size: int, args: argparse.Namespace):
+    """Training process for distributed training.
+    
+    Args:
+        rank (int): Process rank.
+        world_size (int): Total number of processes.
+        args (argparse.Namespace): Command line arguments.
+    """
+    # Set up distributed environment
+    if world_size > 1:
+        setup_distributed(rank, world_size)
     
     # Load configuration
     config = load_config(args.config)
     
     # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() and config['device']['cuda'] else 'cpu')
-    print(f'Using device: {device}')
+    device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() and config['device']['cuda'] else 'cpu')
     
     # Create dataset
-    dataset = get_dataset(config)
-    train_loader, val_loader, test_loader = dataset.get_dataloaders()
+    train_loader, val_loader, test_loader = get_dataset(config, world_size, rank)
     
     # Create model
     model_class = MODEL_REGISTRY.get(args.model_type)
@@ -147,7 +209,9 @@ def main():
         val_loader=val_loader,
         test_loader=test_loader,
         config={**config['model'], **config['training'], **config['logging']},
-        device=device
+        device=device,
+        rank=rank,
+        world_size=world_size
     )
     
     # Resume from checkpoint if specified
@@ -160,15 +224,111 @@ def main():
     if args.eval_only:
         print("Running evaluation...")
         test_loss = trainer.test()
-        print(f"Test Loss: {test_loss:.4f}")
+        if rank == 0:
+            print(f"Test Loss: {test_loss:.4f}")
+        
+        if args.benchmark and rank == 0:
+            print("Running benchmarks...")
+            benchmark = DiffusionBenchmark(
+                device=device,
+                n_samples=config.get('benchmark', {}).get('n_samples', 50000),
+                batch_size=config['training']['batch_size']
+            )
+            
+            metrics = benchmark.evaluate(model, test_loader)
+            
+            # Save benchmark results
+            output_dir = Path(config['logging']['output_dir'])
+            benchmark_path = output_dir / 'benchmark_results.json'
+            
+            print("\nBenchmark Results:")
+            print(f"FID Score: {metrics['fid']:.2f}")
+            print(f"Inception Score: {metrics['is_mean']:.2f} ± {metrics['is_std']:.2f}")
+            print(f"SSIM: {metrics['ssim']:.4f}")
+            print(f"PSNR: {metrics['psnr']:.2f}")
+            
+            with open(benchmark_path, 'w') as f:
+                json.dump(metrics, f, indent=4)
+            print(f"\nBenchmark results saved to {benchmark_path}")
     else:
         # Train model
         trainer.train(config['training']['num_epochs'] - start_epoch)
         
         # Final evaluation
-        print("Running final evaluation...")
+        if rank == 0:
+            print("Running final evaluation...")
         test_loss = trainer.test()
-        print(f"Final Test Loss: {test_loss:.4f}")
+        if rank == 0:
+            print(f"Final Test Loss: {test_loss:.4f}")
+        
+        if args.benchmark and rank == 0:
+            print("Running benchmarks...")
+            benchmark = DiffusionBenchmark(
+                device=device,
+                n_samples=config.get('benchmark', {}).get('n_samples', 50000),
+                batch_size=config['training']['batch_size']
+            )
+            
+            metrics = benchmark.evaluate(model, test_loader)
+            
+            # Save benchmark results
+            output_dir = Path(config['logging']['output_dir'])
+            benchmark_path = output_dir / 'benchmark_results.json'
+            
+            print("\nBenchmark Results:")
+            print(f"FID Score: {metrics['fid']:.2f}")
+            print(f"Inception Score: {metrics['is_mean']:.2f} ± {metrics['is_std']:.2f}")
+            print(f"SSIM: {metrics['ssim']:.4f}")
+            print(f"PSNR: {metrics['psnr']:.2f}")
+            
+            with open(benchmark_path, 'w') as f:
+                json.dump(metrics, f, indent=4)
+            print(f"\nBenchmark results saved to {benchmark_path}")
+    
+    # Clean up distributed environment
+    if world_size > 1:
+        cleanup_distributed()
+
+def main():
+    """Main entry point for training.
+    
+    Parses command-line arguments and launches distributed training
+    if multiple GPUs are available.
+    
+    Command-line Arguments:
+        --config (str): Path to the configuration file.
+        --model_type (str): Type of diffusion model to train.
+            Must be one of: ddpm, ddim, score_based, energy_based.
+        --resume (str, optional): Path to checkpoint to resume training from.
+        --eval_only (bool, optional): Only run evaluation on test set.
+        --benchmark (bool, optional): Run benchmarking during evaluation.
+        --num_gpus (int, optional): Number of GPUs to use. Defaults to all available.
+    """
+    parser = argparse.ArgumentParser(description='Train diffusion models')
+    parser.add_argument('--config', type=str, required=True, help='Path to config file')
+    parser.add_argument('--model_type', type=str, required=True,
+                      choices=list(MODEL_REGISTRY.keys()),
+                      help='Type of diffusion model to train')
+    parser.add_argument('--resume', type=str, help='Path to checkpoint to resume from')
+    parser.add_argument('--eval_only', action='store_true', help='Only run evaluation')
+    parser.add_argument('--benchmark', action='store_true', help='Run benchmarking during evaluation')
+    parser.add_argument('--num_gpus', type=int, help='Number of GPUs to use')
+    args = parser.parse_args()
+    
+    # Determine number of GPUs to use
+    num_gpus = args.num_gpus if args.num_gpus is not None else torch.cuda.device_count()
+    
+    if num_gpus > 1:
+        # Launch distributed training
+        mp.spawn(
+            train_process,
+            args=(num_gpus, args),
+            nprocs=num_gpus,
+            join=True
+        )
+    else:
+        # Single GPU or CPU training
+        train_process(0, 1, args)
 
 if __name__ == '__main__':
     main() 

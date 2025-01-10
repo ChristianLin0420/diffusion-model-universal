@@ -11,6 +11,7 @@ Key Features:
     - Configurable sampling parameters
     - Noise schedule parameter tracking
     - Train/val/test split support
+    - Multi-GPU training support
 """
 
 import torch
@@ -48,6 +49,10 @@ class ScoreBasedTrainer(DDPMTrainer):
             - beta (float): Temperature parameter
             - num_scales (int): Number of noise scales
         device (torch.device): Device to train on (CPU/GPU).
+        rank (int, optional): Process rank for distributed training.
+            Defaults to 0 (single GPU training).
+        world_size (int, optional): Total number of processes.
+            Defaults to 1 (single GPU training).
     
     Attributes:
         Inherits all attributes from DDPMTrainer, plus:
@@ -61,6 +66,7 @@ class ScoreBasedTrainer(DDPMTrainer):
         
         Uses annealed Langevin dynamics to generate samples, which involves
         running multiple steps of Langevin MCMC at decreasing noise levels.
+        Only runs on rank 0 in distributed mode.
         
         Args:
             epoch (int): Current epoch number.
@@ -68,10 +74,16 @@ class ScoreBasedTrainer(DDPMTrainer):
             num_samples (int, optional): Number of samples to generate.
                 Should be a perfect square. Defaults to 16.
         """
+        if self.rank != 0:
+            return
+            
         self.model.eval()
         with torch.no_grad():
             # Use score-based sampling with Langevin dynamics
-            samples = self.model.sample(num_samples, self.device)
+            if self.is_distributed:
+                samples = self.model.module.sample(num_samples, self.device)
+            else:
+                samples = self.model.sample(num_samples, self.device)
             
             # Save samples using parent class method
             self._save_samples(samples, epoch)
@@ -81,7 +93,7 @@ class ScoreBasedTrainer(DDPMTrainer):
         
         In addition to the base metrics, logs the noise schedule parameters
         and temperature parameter to track their values during training.
-        Also logs validation metrics when available.
+        Only logs on rank 0 in distributed mode.
         
         Args:
             loss (torch.Tensor): Current training loss.
@@ -91,11 +103,11 @@ class ScoreBasedTrainer(DDPMTrainer):
         """
         super()._log_additional_metrics(loss, epoch)
         
-        if self.config.get('use_wandb', False):
+        if self.rank == 0 and self.config.get('use_wandb', False):
             import wandb
             # Log noise schedule parameters
             wandb.log({
-                'sigma_min': self.model.sigma_min,
-                'sigma_max': self.model.sigma_max,
-                'beta': self.model.beta
+                'sigma_min': self.model.module.sigma_min if self.is_distributed else self.model.sigma_min,
+                'sigma_max': self.model.module.sigma_max if self.is_distributed else self.model.sigma_max,
+                'beta': self.model.module.beta if self.is_distributed else self.model.beta
             }, step=epoch) 
