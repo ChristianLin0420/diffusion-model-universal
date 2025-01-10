@@ -1,79 +1,149 @@
+"""Base Diffusion Model.
+
+This module provides the base class for all diffusion models in the project.
+It defines the common interface and shared functionality that all diffusion
+models must implement.
+
+Key Features:
+    - Abstract base class for diffusion models
+    - Common interface for forward pass, loss computation, and sampling
+    - Checkpoint saving and loading functionality
+    - Configuration management
+"""
+
 from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
+from typing import Dict, Optional, Any
 
 class BaseDiffusion(nn.Module, ABC):
-    """Base class for all diffusion models."""
+    """Base class for all diffusion models.
     
-    def __init__(self, config):
-        """
-        Initialize the base diffusion model.
+    This abstract base class defines the interface that all diffusion models
+    must implement. It provides common functionality for model initialization,
+    checkpoint management, and basic operations.
+    
+    Args:
+        config (Dict): Model configuration parameters.
+            The configuration should contain all necessary parameters for
+            model initialization and operation.
+    
+    Attributes:
+        config (Dict): Model configuration parameters.
+    
+    Example:
+        >>> class CustomDiffusion(BaseDiffusion):
+        ...     def __init__(self, config):
+        ...         super().__init__(config)
+        ...         self.model = create_model(config)
+        ...
+        ...     def forward(self, x, t):
+        ...         return self.model(x, t)
+    """
+    
+    def __init__(self, config: Dict):
+        """Initialize the base diffusion model.
+        
+        Sets up the basic model structure and stores the configuration.
+        Subclasses should call this initialization before adding their
+        specific initialization code.
         
         Args:
-            config (dict): Model configuration parameters
+            config: Dictionary containing model configuration parameters.
         """
         super().__init__()
         self.config = config
-        
-    @abstractmethod
-    def forward(self, x, t):
-        """
-        Forward pass of the model.
-        
-        Args:
-            x (torch.Tensor): Input tensor
-            t (torch.Tensor): Timestep tensor
-            
-        Returns:
-            torch.Tensor: Model output
-        """
-        pass
     
     @abstractmethod
-    def loss_function(self, x):
-        """
-        Calculate the loss for training.
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Forward pass of the model.
+        
+        This method should be implemented by all subclasses to define
+        the forward pass of their specific diffusion model.
         
         Args:
-            x (torch.Tensor): Input data
+            x (torch.Tensor): Input tensor of shape [B, C, H, W].
+                The input data to process.
+            t (torch.Tensor): Timestep tensor of shape [B].
+                The timesteps for each sample in the batch.
             
         Returns:
-            torch.Tensor: Calculated loss
+            torch.Tensor: Output tensor of shape [B, C, H, W].
+                The model's prediction for the input at the given timesteps.
+        
+        Raises:
+            NotImplementedError: If the subclass doesn't implement this method.
         """
-        pass
+        raise NotImplementedError
     
     @abstractmethod
-    def sample(self, batch_size, device):
-        """
-        Generate samples from the model.
+    def loss_function(self, x: torch.Tensor) -> torch.Tensor:
+        """Calculate the loss for training.
+        
+        This method should be implemented by all subclasses to define
+        their specific loss computation logic.
         
         Args:
-            batch_size (int): Number of samples to generate
-            device (torch.device): Device to generate samples on
+            x (torch.Tensor): Input data tensor of shape [B, C, H, W].
+                The training data to compute the loss for.
             
         Returns:
-            torch.Tensor: Generated samples
+            torch.Tensor: Scalar loss value.
+                The computed loss for the input data.
+        
+        Raises:
+            NotImplementedError: If the subclass doesn't implement this method.
         """
-        pass
+        raise NotImplementedError
     
-    def save(self, path):
-        """
-        Save model checkpoint.
+    @abstractmethod
+    def sample(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """Generate samples from the model.
+        
+        This method should be implemented by all subclasses to define
+        their specific sampling procedure.
         
         Args:
-            path (str): Path to save the checkpoint
+            batch_size (int): Number of samples to generate.
+            device (torch.device): Device to generate samples on.
+            
+        Returns:
+            torch.Tensor: Generated samples of shape [B, C, H, W].
+                The samples generated by the model.
+        
+        Raises:
+            NotImplementedError: If the subclass doesn't implement this method.
+        """
+        raise NotImplementedError
+    
+    def save(self, path: str) -> None:
+        """Save model checkpoint.
+        
+        Saves the model's state dictionary and configuration to the
+        specified path.
+        
+        Args:
+            path (str): Path to save the checkpoint.
+                Should end with '.pt' or '.pth'.
         """
         torch.save({
             'model_state_dict': self.state_dict(),
             'config': self.config
         }, path)
     
-    def load(self, path):
-        """
-        Load model checkpoint.
+    def load(self, path: str) -> None:
+        """Load model checkpoint.
+        
+        Loads the model's state dictionary and configuration from the
+        specified path.
         
         Args:
-            path (str): Path to the checkpoint
+            path (str): Path to the checkpoint file.
+                Should be a file created by the save() method.
+        
+        Raises:
+            FileNotFoundError: If the checkpoint file doesn't exist.
+            RuntimeError: If the checkpoint is incompatible with the model.
         """
         checkpoint = torch.load(path)
         self.load_state_dict(checkpoint['model_state_dict'])

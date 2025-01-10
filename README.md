@@ -23,6 +23,24 @@ A comprehensive PyTorch-based framework for training and experimenting with vari
   - Gradient penalty regularization
   - Time conditioning options
 
+### Supported Datasets
+- **MNIST**
+  - Standard 28x28 grayscale images
+  - Automatically converted to RGB and resized
+  - Basic augmentation with normalization
+  
+- **CIFAR-10**
+  - 32x32 RGB natural images
+  - 10 classes of objects
+  - Includes random horizontal flips
+  - Normalized to [-1, 1] range
+  
+- **CelebA**
+  - High-quality celebrity face images
+  - Center-cropped and resized
+  - Supports different image sizes (default: 64x64)
+  - Includes standard preprocessing and augmentation
+
 ### Flexible Loss Functions
 All models support multiple loss functions that can be configured via YAML:
 - MSE Loss
@@ -160,6 +178,34 @@ model:
   loss_config:
     energy_scale: 1.0
     regularization_weight: 0.1
+```
+
+#### Dataset-specific Configurations
+Example configurations are provided for each dataset:
+
+1. **MNIST Configuration**:
+```yaml
+dataset:
+  name: "mnist"
+  data_dir: "./data"
+  image_size: 32
+```
+
+2. **CIFAR-10 Configuration**:
+```yaml
+dataset:
+  name: "cifar10"
+  data_dir: "./data"
+  image_size: 32  # Native CIFAR-10 size
+```
+
+3. **CelebA Configuration**:
+```yaml
+dataset:
+  name: "celeba"
+  data_dir: "./data"
+  image_size: 64  # Can be adjusted based on needs
+  crop_size: 178  # CelebA-specific center crop
 ```
 
 ## Extending the Framework

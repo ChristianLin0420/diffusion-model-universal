@@ -1,0 +1,48 @@
+# Model Configuration
+model:
+  in_channels: 3
+  model_channels: 128  # Larger model for CelebA
+  image_size: 64  # CelebA typically uses 64x64 or larger
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_timesteps: 1000
+  # Loss configuration
+  loss_type: 'hybrid'
+  loss_config:
+    weights:
+      mse: 0.6
+      l1: 0.3
+      huber: 0.1
+    time_weights:
+      type: 'linear'
+      max_timesteps: 1000
+      beta: 0.1
+    reduction: 'mean'
+
+# Training Configuration
+training:
+  batch_size: 64  # Smaller batch size due to larger images
+  num_epochs: 200
+  learning_rate: 2e-4
+  beta1: 0.9
+  beta2: 0.999
+  sample_interval: 5
+  checkpoint_interval: 10
+  num_workers: 4
+
+# Dataset Configuration
+dataset:
+  name: "celeba"
+  data_dir: "./data"
+  image_size: 64
+  crop_size: 178  # CelebA-specific center crop size
+
+# Logging Configuration
+logging:
+  use_wandb: true
+  wandb_project: "diffusion-models"
+  output_dir: "outputs/celeba"
+
+# Device Configuration
+device:
+  cuda: true 
