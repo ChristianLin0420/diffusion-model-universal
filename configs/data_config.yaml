@@ -1,0 +1,63 @@
+datasets:
+  celeba:
+    name: "celeba"
+    data_dir: "./data/celeba"
+    image_size: 64
+    crop_size: 178
+    mean: [0.5, 0.5, 0.5]
+    std: [0.5, 0.5, 0.5]
+    transforms:
+      - name: "center_crop"
+        size: 178
+      - name: "resize"
+        size: 64
+      - name: "normalize"
+    dataloader:
+      batch_size: 64
+      num_workers: 4
+      shuffle: true
+      pin_memory: true
+    splits:
+      train: 0.8
+      val: 0.1
+      test: 0.1
+
+  cifar10:
+    name: "cifar10"
+    data_dir: "./data/cifar10"
+    image_size: 32
+    mean: [0.5, 0.5, 0.5]
+    std: [0.5, 0.5, 0.5]
+    transforms:
+      - name: "resize"
+        size: 32
+      - name: "normalize"
+    dataloader:
+      batch_size: 128
+      num_workers: 4
+      shuffle: true
+      pin_memory: true
+    splits:
+      train: 0.8
+      val: 0.1
+      test: 0.1
+
+  mnist:
+    name: "mnist"
+    data_dir: "./data/mnist"
+    image_size: 28
+    mean: [0.5]
+    std: [0.5]
+    transforms:
+      - name: "resize"
+        size: 28
+      - name: "normalize"
+    dataloader:
+      batch_size: 128
+      num_workers: 4
+      shuffle: true
+      pin_memory: true
+    splits:
+      train: 0.8
+      val: 0.1
+      test: 0.1 

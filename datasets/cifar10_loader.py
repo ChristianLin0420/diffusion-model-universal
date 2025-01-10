@@ -26,72 +26,89 @@ class CIFAR10Dataset:
     RGB images with appropriate transformations for training, validation, and testing.
     
     Args:
-        data_dir (str): Directory to store the dataset. Defaults to "./data".
-            The directory will be created if it doesn't exist.
-        
-        image_size (int): Size to resize images to. Defaults to 32.
-            Both height and width will be resized to this value.
-            Note: CIFAR-10's native size is 32x32.
-        
-        batch_size (int): Batch size for dataloaders. Defaults to 32.
-            Used for train, validation, and test dataloaders.
-        
-        num_workers (int): Number of workers for dataloaders. Defaults to 4.
-            More workers can speed up data loading but use more memory.
-        
-        val_split (float): Fraction of training data to use for validation.
-            Must be between 0 and 1. Defaults to 0.1 (10% validation).
+        data_dir (str): Directory to store the dataset.
+        image_size (int): Size to resize images to.
+        transforms (dict): Dictionary containing 'train' and 'eval' transform pipelines.
+        split_ratios (dict): Dictionary containing train/val/test split ratios.
+            Must contain 'train', 'val', and 'test' keys with float values that sum to 1.
     
     Attributes:
-        transform (transforms.Compose): Transformation pipeline for training data,
-            including random horizontal flips for augmentation.
-        val_transform (transforms.Compose): Transformation pipeline for validation data,
-            without augmentation.
-        test_transform (transforms.Compose): Transformation pipeline for test data,
-            without augmentation.
-    
-    Example:
-        >>> dataset = CIFAR10Dataset(image_size=32, batch_size=128)
-        >>> train_loader, val_loader, test_loader = dataset.get_dataloaders()
-        >>> for images, labels in train_loader:
-        ...     # images will be RGB tensors of shape [128, 3, 32, 32]
-        ...     pass
+        train_dataset (Dataset): Training dataset with augmentation transforms
+        val_dataset (Dataset): Validation dataset with basic transforms
+        test_dataset (Dataset): Test dataset with basic transforms
     """
     
     def __init__(
         self,
-        data_dir: str = "./data",
-        image_size: int = 32,
-        batch_size: int = 32,
-        num_workers: int = 4,
-        val_split: float = 0.1
+        data_dir: str,
+        image_size: int,
+        transforms: dict,
+        split_ratios: dict
     ):
-        """Initialize CIFAR-10 dataset loader.
-        
-        Sets up the data directory and transformation pipelines for training,
-        validation, and testing. The training pipeline includes data augmentation,
-        while the validation and test pipelines only include necessary preprocessing.
-        """
+        """Initialize CIFAR-10 dataset loader with separate transforms for training and evaluation."""
         self.data_dir = data_dir
         self.image_size = image_size
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.val_split = val_split
+        self.transforms = transforms
+        self.split_ratios = split_ratios
         
-        # Define transforms for training data (with augmentation)
-        self.transform = transforms.Compose([
-            transforms.Resize(image_size),  # Resize if needed
-            transforms.RandomHorizontalFlip(),  # Data augmentation
-            transforms.ToTensor(),  # Convert to tensor and scale to [0, 1]
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Normalize to [-1, 1]
-        ])
+        # Validate transforms
+        if not all(k in transforms for k in ['train', 'eval']):
+            raise ValueError("transforms must contain both 'train' and 'eval' keys")
         
-        # Define transforms for validation/test data (no augmentation)
-        self.val_transform = self.test_transform = transforms.Compose([
-            transforms.Resize(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
+        # Validate split ratios
+        if not all(k in split_ratios for k in ['train', 'val', 'test']):
+            raise ValueError("split_ratios must contain 'train', 'val', and 'test' keys")
+        if abs(sum(split_ratios.values()) - 1.0) > 1e-6:
+            raise ValueError("Split ratios must sum to 1")
+        
+        # Download and load the full training dataset
+        train_val_dataset = datasets.CIFAR10(
+            root=self.data_dir,
+            train=True,
+            download=True,
+            transform=None  # We'll set transforms after splitting
+        )
+        
+        # Calculate split sizes
+        total_size = len(train_val_dataset)
+        train_size = int(total_size * split_ratios['train'])
+        val_size = int(total_size * split_ratios['val'])
+        test_size = total_size - train_size - val_size
+        
+        # Create train/val/test splits
+        train_subset, val_subset, remaining = random_split(
+            train_val_dataset,
+            [train_size, val_size, test_size],
+            generator=torch.Generator().manual_seed(42)
+        )
+        
+        # Create wrapped datasets with appropriate transforms
+        self.train_dataset = TransformDataset(train_subset, transforms['train'])
+        self.val_dataset = TransformDataset(val_subset, transforms['eval'])
+        
+        # Load the test dataset
+        self.test_dataset = datasets.CIFAR10(
+            root=self.data_dir,
+            train=False,
+            download=True,
+            transform=transforms['eval']
+        )
+
+class TransformDataset(Dataset):
+    """Wrapper dataset that applies transforms to a subset."""
+    
+    def __init__(self, subset, transform):
+        self.subset = subset
+        self.transform = transform
+    
+    def __getitem__(self, idx):
+        x, y = self.subset[idx]
+        if self.transform:
+            x = self.transform(x)
+        return x, y
+    
+    def __len__(self):
+        return len(self.subset)
     
     def get_dataloaders(self) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """Get train, validation, and test dataloaders.
@@ -115,38 +132,9 @@ class CIFAR10Dataset:
             >>> print(f"Validation batches: {len(val_loader)}")
             >>> print(f"Test batches: {len(test_loader)}")
         """
-        # Download and load training data
-        full_train_dataset = datasets.CIFAR10(
-            root=self.data_dir,
-            train=True,
-            download=True,
-            transform=self.transform
-        )
-        
-        # Split into train and validation
-        val_size = int(len(full_train_dataset) * self.val_split)
-        train_size = len(full_train_dataset) - val_size
-        
-        train_dataset, val_dataset = random_split(
-            full_train_dataset, 
-            [train_size, val_size],
-            generator=torch.Generator().manual_seed(42)  # For reproducibility
-        )
-        
-        # Override validation transform
-        val_dataset.dataset.transform = self.val_transform
-        
-        # Download and load test data
-        test_dataset = datasets.CIFAR10(
-            root=self.data_dir,
-            train=False,
-            download=True,
-            transform=self.test_transform
-        )
-        
         # Create dataloaders with appropriate settings
         train_loader = DataLoader(
-            train_dataset,
+            self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,  # Shuffle training data
             num_workers=self.num_workers,
@@ -154,7 +142,7 @@ class CIFAR10Dataset:
         )
         
         val_loader = DataLoader(
-            val_dataset,
+            self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,  # Don't shuffle validation data
             num_workers=self.num_workers,
@@ -162,7 +150,7 @@ class CIFAR10Dataset:
         )
         
         test_loader = DataLoader(
-            test_dataset,
+            self.test_dataset,
             batch_size=self.batch_size,
             shuffle=False,  # Don't shuffle test data
             num_workers=self.num_workers,

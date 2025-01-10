@@ -17,11 +17,19 @@ model_config:
 # Training Configuration
 training:
   num_epochs: 500
-  batch_size: 64
+  batch_size: 128
   learning_rate: 2e-4
   beta1: 0.9
   beta2: 0.999
   ema_decay: 0.9999
+  scheduler:
+    type: "cosine"  # Options: cosine, linear, step, exponential
+    warmup_steps: 1000  # Number of warmup steps
+    min_lr: 1e-6  # Minimum learning rate
+    gamma: 0.1  # For step and exponential schedulers
+    step_size: 100  # For step scheduler (in epochs)
+    cycle_length: 50  # For cosine scheduler with restarts (in epochs)
+    cycle_mult: 2  # Multiply cycle length by this factor after each restart
   val_interval: 1000  # Steps between validation
   sample_interval: 5  # Epochs between sample generation
   checkpoint_interval: 10  # Epochs between checkpoints
@@ -52,7 +60,25 @@ logging:
   track_grad_norm: true  # Track gradient norms
   track_memory_usage: true  # Track GPU memory usage
   track_samples: true  # Track generated samples
+  gradient_logging_freq: 100  # Steps between gradient logging
   sample_visualization_frequency: 1000  # Steps between sample visualizations
+  
+  # Detailed Metrics Configuration
+  track_per_layer_metrics: true  # Track metrics for each layer
+  track_parameter_histograms: true  # Track parameter distributions
+  track_optimizer_stats: true  # Track optimizer statistics
+  track_batch_stats: true  # Track batch statistics
+  
+  # Performance Monitoring
+  track_time_metrics: true  # Track training time metrics
+  track_gpu_stats: true  # Track detailed GPU statistics
+  track_throughput: true  # Track samples/second
+  
+  # Diffusion Process Metrics
+  track_noise_schedule: true  # Track noise schedule parameters
+  track_sample_quality: true  # Track generated sample quality metrics
+  track_beta_schedule: true  # Track beta schedule values
+  track_timestep_embeddings: true  # Track timestep embedding statistics
 
 # Output Configuration
 output:

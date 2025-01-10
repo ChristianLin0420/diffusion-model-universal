@@ -15,6 +15,7 @@ Key Features:
     - Multi-GPU training support
 """
 
+import datetime
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -27,6 +28,7 @@ from tqdm import tqdm
 import wandb
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional
+import time
 
 class DDPMTrainer:
     """Trainer class for DDPM models.
@@ -127,9 +129,53 @@ class DDPMTrainer:
         # Setup optimizer
         self.optimizer = Adam(
             self.model.parameters(),
-            lr=config.get('learning_rate', 2e-4),
+            lr=float(config.get('learning_rate', 2e-4)),
             betas=(config.get('beta1', 0.9), config.get('beta2', 0.999))
         )
+        
+        # Setup learning rate scheduler
+        scheduler_config = config.get('training', {}).get('scheduler', {})
+        if scheduler_config:
+            scheduler_type = scheduler_config.get('type', 'cosine')
+            warmup_steps = scheduler_config.get('warmup_steps', 0)
+            min_lr = scheduler_config.get('min_lr', 1e-6)
+            
+            if scheduler_type == 'cosine':
+                cycle_length = scheduler_config.get('cycle_length', 50)
+                cycle_mult = scheduler_config.get('cycle_mult', 2)
+                self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                    self.optimizer,
+                    T_0=cycle_length,
+                    T_mult=cycle_mult,
+                    eta_min=min_lr
+                )
+            elif scheduler_type == 'linear':
+                total_steps = len(train_loader) * config.get('training', {}).get('num_epochs', 500)
+                def lr_lambda(step):
+                    if step < warmup_steps:
+                        return float(step) / float(max(1, warmup_steps))
+                    return max(0.0, float(total_steps - step) / float(max(1, total_steps - warmup_steps)))
+                self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+            elif scheduler_type == 'step':
+                step_size = scheduler_config.get('step_size', 100)
+                gamma = scheduler_config.get('gamma', 0.1)
+                self.scheduler = torch.optim.lr_scheduler.StepLR(
+                    self.optimizer,
+                    step_size=step_size,
+                    gamma=gamma
+                )
+            elif scheduler_type == 'exponential':
+                gamma = scheduler_config.get('gamma', 0.95)
+                self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                    self.optimizer,
+                    gamma=gamma
+                )
+            else:
+                self.scheduler = None
+                if self.rank == 0:
+                    print(f"Warning: Unknown scheduler type '{scheduler_type}'. No scheduler will be used.")
+        else:
+            self.scheduler = None
         
         # Setup data loaders
         self.train_loader = train_loader
@@ -152,7 +198,7 @@ class DDPMTrainer:
                 if config.get('use_wandb', False):
                     wandb.init(
                         project=config.get('wandb_project', 'diffusion-models'),
-                        name=f"{self.model_name}_{config.get('run_name', '')}",
+                        name=f"{self.model_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
                         group=config.get('group', 'default'),
                         config={
                             **config,
@@ -201,6 +247,13 @@ class DDPMTrainer:
         if prefix:
             metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
         
+        # Add memory usage metrics if tracking is enabled
+        if self.config.get('logging', {}).get('track_memory_usage', False):
+            metrics.update({
+                f"{prefix}/gpu_memory_allocated": torch.cuda.memory_allocated(self.device) / 1024**2,  # MB
+                f"{prefix}/gpu_memory_cached": torch.cuda.memory_reserved(self.device) / 1024**2  # MB
+            })
+        
         # Log to wandb if enabled
         if self.config.get('use_wandb', False):
             wandb.log(metrics, step=step)
@@ -209,6 +262,138 @@ class DDPMTrainer:
         if self.writer is not None:
             for name, value in metrics.items():
                 self.writer.add_scalar(name, value, step)
+    
+    def _log_model_gradients(self, step: int):
+        """Log model gradients and weights statistics.
+        
+        Computes and logs gradient norms, weight norms, and other statistics
+        for model parameters. Only logs on rank 0 in distributed mode.
+        
+        Args:
+            step (int): Current step for logging.
+        """
+        if self.rank != 0 or not self.config.get('logging', {}).get('track_grad_norm', False):
+            return
+        
+        grad_norms = {}
+        weight_norms = {}
+        grad_hist = {}
+        weight_hist = {}
+        
+        # Get the actual model (handle DDP case)
+        model = self.model.module if self.is_distributed else self.model
+        
+        # Compute statistics for each parameter
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                # Gradient statistics
+                grad_norm = param.grad.norm().item()
+                grad_norms[f"grad_norm/{name}"] = grad_norm
+                grad_hist[f"grad_hist/{name}"] = param.grad.cpu()
+                
+                # Weight statistics
+                weight_norm = param.norm().item()
+                weight_norms[f"weight_norm/{name}"] = weight_norm
+                weight_hist[f"weight_hist/{name}"] = param.cpu()
+        
+        # Compute global statistics
+        total_grad_norm = sum(norm * norm for norm in grad_norms.values()) ** 0.5
+        total_weight_norm = sum(norm * norm for norm in weight_norms.values()) ** 0.5
+        
+        # Log to wandb
+        if self.config.get('use_wandb', False):
+            wandb.log({
+                "model/total_grad_norm": total_grad_norm,
+                "model/total_weight_norm": total_weight_norm,
+                "model/grad_norms": grad_norms,
+                "model/weight_norms": weight_norms,
+                "model/param_histograms": {
+                    **{k: wandb.Histogram(v) for k, v in grad_hist.items()},
+                    **{k: wandb.Histogram(v) for k, v in weight_hist.items()}
+                }
+            }, step=step)
+    
+    def _log_performance_metrics(self, batch_start_time: float, batch_size: int, step: int):
+        """Log performance-related metrics.
+        
+        Args:
+            batch_start_time (float): Start time of the batch
+            batch_size (int): Size of the batch
+            step (int): Current step for logging
+        """
+        if self.rank != 0 or not self.config.get('logging', {}).get('track_time_metrics', False):
+            return
+            
+        batch_time = time.time() - batch_start_time
+        samples_per_sec = batch_size / batch_time
+        
+        metrics = {
+            'performance/batch_time': batch_time,
+            'performance/samples_per_second': samples_per_sec,
+            'performance/steps_per_second': 1.0 / batch_time
+        }
+        
+        # Track GPU metrics if enabled
+        if self.config.get('logging', {}).get('track_gpu_stats', False):
+            metrics.update({
+                'performance/gpu_utilization': torch.cuda.utilization(self.device),
+                'performance/gpu_memory_used': torch.cuda.memory_allocated(self.device) / 1024**3,  # GB
+                'performance/gpu_memory_cached': torch.cuda.memory_reserved(self.device) / 1024**3  # GB
+            })
+        
+        self._log_metrics(metrics, step=step)
+    
+    def _log_optimizer_stats(self, step: int):
+        """Log optimizer-related statistics.
+        
+        Args:
+            step (int): Current step for logging
+        """
+        if self.rank != 0 or not self.config.get('logging', {}).get('track_optimizer_stats', False):
+            return
+            
+        # Get optimizer state
+        state = self.optimizer.state_dict()['state']
+        
+        # Compute average statistics across all parameters
+        avg_exp_avg = 0.0
+        avg_exp_avg_sq = 0.0
+        num_params = 0
+        
+        for param_state in state.values():
+            if 'exp_avg' in param_state:
+                avg_exp_avg += param_state['exp_avg'].abs().mean().item()
+                avg_exp_avg_sq += param_state['exp_avg_sq'].abs().mean().item()
+                num_params += 1
+        
+        if num_params > 0:
+            metrics = {
+                'optimizer/average_first_moment': avg_exp_avg / num_params,
+                'optimizer/average_second_moment': avg_exp_avg_sq / num_params,
+                'optimizer/learning_rate': self.optimizer.param_groups[0]['lr'],
+                'optimizer/beta1': self.optimizer.param_groups[0]['betas'][0],
+                'optimizer/beta2': self.optimizer.param_groups[0]['betas'][1]
+            }
+            self._log_metrics(metrics, step=step)
+    
+    def _log_diffusion_metrics(self, model, step: int):
+        """Log diffusion process specific metrics.
+        
+        Args:
+            model: The DDPM model (unwrapped from DDP if necessary)
+            step (int): Current step for logging
+        """
+        if self.rank != 0:
+            return
+            
+        config = self.config.get('logging', {})
+        if config.get('track_noise_schedule', False):
+            metrics = {
+                'diffusion/beta_schedule': wandb.Histogram(model.betas.cpu()),
+                'diffusion/alpha_schedule': wandb.Histogram(model.alphas.cpu()),
+                'diffusion/alpha_cumprod': wandb.Histogram(model.alphas_cumprod.cpu())
+            }
+            self._log_metrics(metrics, step=step)
     
     def train(self, num_epochs: int):
         """Train the DDPM model.
@@ -263,7 +448,9 @@ class DDPMTrainer:
                     pbar = self.train_loader
                 
                 # Training loop
-                for batch in pbar:
+                for batch_idx, batch in enumerate(pbar):
+                    batch_start_time = time.time()
+                    
                     # Move batch to device
                     images = batch[0].to(self.device)
                     
@@ -279,9 +466,44 @@ class DDPMTrainer:
                     loss.backward()
                     self.optimizer.step()
                     
+                    # Update learning rate
+                    if self.scheduler is not None:
+                        if isinstance(self.scheduler, torch.optim.lr_scheduler.CosineAnnealingWarmRestarts):
+                            self.scheduler.step(epoch + batch_idx / len(self.train_loader))
+                        elif isinstance(self.scheduler, (torch.optim.lr_scheduler.StepLR, torch.optim.lr_scheduler.ExponentialLR)):
+                            self.scheduler.step(epoch)
+                        else:
+                            self.scheduler.step()
+                    
                     # Update metrics
                     total_loss += loss.item()
                     num_batches += 1
+                    
+                    # Log detailed training metrics
+                    if self.rank == 0 and self.config.get('use_wandb', False):
+                        # Get current learning rate
+                        current_lr = self.optimizer.param_groups[0]['lr']
+                        
+                        # Log training dynamics
+                        train_metrics = {
+                            'train/loss': loss.item(),
+                            'train/learning_rate': current_lr,
+                            'train/epoch': epoch + batch_idx / len(self.train_loader),
+                            'train/global_step': global_step,
+                        }
+                        
+                        # Log metrics
+                        self._log_metrics(train_metrics, step=global_step)
+                        
+                        # Log additional metrics periodically
+                        if global_step % self.config.get('logging', {}).get('gradient_logging_freq', 100) == 0:
+                            self._log_model_gradients(global_step)
+                            self._log_optimizer_stats(global_step)
+                            model = self.model.module if self.is_distributed else self.model
+                            self._log_diffusion_metrics(model, global_step)
+                        
+                        # Log performance metrics
+                        self._log_performance_metrics(batch_start_time, images.size(0), global_step)
                     
                     # Update progress bar on rank 0
                     if self.rank == 0:
@@ -542,7 +764,8 @@ class DDPMTrainer:
             'model_state_dict': self.model.module.state_dict() if self.is_distributed else self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'config': self.config,
-            'best_val_loss': self.best_val_loss
+            'best_val_loss': self.best_val_loss,
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None
         }
         
         # Save regular checkpoint
@@ -564,21 +787,13 @@ class DDPMTrainer:
                 wandb.save(best_path)
     
     def load_checkpoint(self, checkpoint_path: str) -> int:
-        """Load a model checkpoint.
-        
-        In distributed mode, loads the state dict into the module.
-        Restores the model and optimizer state from a checkpoint file.
+        """Load a checkpoint and return the epoch number.
         
         Args:
             checkpoint_path (str): Path to the checkpoint file.
-                Should be a file created by save_checkpoint().
         
         Returns:
-            int: The epoch number when the checkpoint was created.
-        
-        Raises:
-            FileNotFoundError: If the checkpoint file doesn't exist.
-            RuntimeError: If the checkpoint is incompatible with the model.
+            int: The epoch number of the checkpoint.
         """
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         
@@ -588,9 +803,13 @@ class DDPMTrainer:
             self.model.load_state_dict(checkpoint['model_state_dict'])
             
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        if self.scheduler is not None and checkpoint.get('scheduler_state_dict') is not None:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         
-        return checkpoint.get('epoch', 0)
+        return checkpoint['epoch']
     
     def cleanup(self):
         """Perform cleanup operations.
