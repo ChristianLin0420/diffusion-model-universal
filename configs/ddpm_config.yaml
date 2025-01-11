@@ -82,7 +82,7 @@ logging:
   notes: "DDPM baseline model training on ${data.dataset}"  # Run description
   
   # TensorBoard Configuration
-  use_tensorboard: true
+  use_tensorboard: false
   tensorboard_dir: "logs"
   
   # Metric Tracking
