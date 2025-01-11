@@ -1,16 +1,34 @@
-torch>=2.0.0
-torchvision>=0.15.0
-numpy>=1.24.0
-pillow>=9.3.0
-matplotlib>=3.7.0
-tqdm>=4.65.0
-PyYAML>=6.0
-tensorboard>=2.13.0
-pytest>=7.3.1
-black>=23.3.0
-isort>=5.12.0
-flake8>=6.0.0
-scipy>=1.10.0
-einops>=0.6.1
-wandb>=0.15.0  # for experiment tracking
-torchmetrics>=1.0.0 
+# Deep Learning Framework
+torch>=2.0.0,<3.0.0
+torchvision>=0.15.0,<1.0.0
+numpy>=1.24.0,<2.0.0
+
+# Image Processing
+pillow>=9.3.0,<10.0.0
+
+# Visualization and Logging
+matplotlib>=3.7.0,<4.0.0
+tensorboard>=2.13.0,<3.0.0
+wandb>=0.15.0,<1.0.0  # Experiment tracking
+
+# ML Utilities
+pynvml>=11.5.0,<12.0.0  # GPU monitoring
+tqdm>=4.65.0,<5.0.0
+scipy>=1.10.0,<2.0.0
+einops>=0.6.1,<1.0.0
+torchmetrics>=1.0.0,<2.0.0
+
+# Configuration
+PyYAML>=6.0,<7.0.0
+
+# Development Tools
+pytest>=7.3.1,<8.0.0
+black>=23.3.0,<24.0.0
+isort>=5.12.0,<6.0.0
+flake8>=6.0.0,<7.0.0
+
+# Added Dependencies
+pandas>=2.0.0,<3.0.0  # Data manipulation
+scikit-learn>=1.3.0,<2.0.0  # Machine learning utilities
+opencv-python>=4.8.0,<5.0.0  # Image processing
+albumentations>=1.3.0,<2.0.0  # Image augmentation 

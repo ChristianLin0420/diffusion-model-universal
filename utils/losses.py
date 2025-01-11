@@ -133,32 +133,51 @@ class DiffusionLoss:
     def _get_time_weights(self, timesteps: torch.Tensor) -> torch.Tensor:
         """Get time-dependent weights for loss calculation.
         
-        Supports multiple weighting schemes:
-        - SNR: Signal-to-Noise Ratio based weighting
-        - Linear: Linear interpolation between min and max weights
-        - Inverse: Inverse time weighting
+        Args:
+            timesteps: Current timesteps in the diffusion process [B]
+        Returns:
+            weights: Time-dependent weights [B, 1, 1, 1]
         """
         min_weight = self.time_weight_params['min_weight']
         max_weight = self.time_weight_params['max_weight']
         
         if self.time_weight_type == 'snr':
-            # SNR-based weighting (commonly used in diffusion models)
-            alphas = torch.cos(timesteps.float() * torch.pi / 2)  # Simplified SNR curve
-            weights = alphas ** 2 / (1 - alphas ** 2)
+            # Proper SNR-based weighting using beta schedule
+            # Convert timesteps to float and scale to [0, 1]
+            t = timesteps.float() / timesteps.max()
+            
+            # Use linear beta schedule (you can adjust these values)
+            beta_start = 1e-4
+            beta_end = 2e-2
+            betas = torch.linspace(beta_start, beta_end, timesteps.max().item() + 1, device=timesteps.device)
+            
+            # Calculate alpha products
+            alphas = 1 - betas
+            alphas_cumprod = torch.cumprod(alphas, dim=0)
+            alphas_cumprod = alphas_cumprod.index_select(0, timesteps)
+            
+            # Calculate SNR weights
+            snr = alphas_cumprod / (1 - alphas_cumprod)
+            weights = snr / snr.max()  # Normalize to [0, 1]
+            
+            # Ensure no division by zero or negative values
+            weights = weights.clamp(min=1e-5)
+            
         elif self.time_weight_type == 'linear':
             # Linear interpolation
             weights = 1 - (timesteps.float() / timesteps.max())
         elif self.time_weight_type == 'inverse':
-            # Inverse time weighting
+            # Inverse time weighting with offset to prevent division by zero
             weights = 1 / (timesteps.float() + 1)
         else:
             weights = torch.ones_like(timesteps, dtype=torch.float)
         
         # Scale weights to [min_weight, max_weight]
         weights = min_weight + (max_weight - min_weight) * (
-            (weights - weights.min()) / (weights.max() - weights.min())
+            (weights - weights.min()) / (weights.max() - weights.min() + 1e-5)
         )
         
+        # Add dimensions for broadcasting
         return weights.view(-1, 1, 1, 1)
 
 class PerceptualLoss(nn.Module):

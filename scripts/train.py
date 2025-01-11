@@ -156,7 +156,7 @@ def train_process(rank: int, world_size: int, args: argparse.Namespace):
             print(f"\nBenchmark results saved to {benchmark_path}")
     else:
         # Train model
-        trainer.train(config['training']['num_epochs'] - start_epoch)
+        trainer.train((config['training']['num_epochs']) - start_epoch)
         
         # Final evaluation
         if rank == 0:

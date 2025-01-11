@@ -46,7 +46,7 @@ model_config:
 # Training Configuration
 training:
   num_epochs: 500
-  batch_size: 512
+  batch_size: 128
   learning_rate: 2e-4
   beta1: 0.9
   beta2: 0.999
@@ -75,7 +75,7 @@ data:
 logging:
   # Weights & Biases Configuration
   use_wandb: true
-  wandb_project: "diffusion-models"
+  wandb_project: "testing"
   wandb_entity: null  # Your wandb username/entity
   group: "${data.dataset}_comparison"  # Dataset-specific group for comparing models
   tags: ["ddpm", "baseline", "${data.dataset}"]  # Tags for organizing runs

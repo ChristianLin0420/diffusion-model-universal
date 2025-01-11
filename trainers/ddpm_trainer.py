@@ -131,8 +131,8 @@ class DDPMTrainer:
         # Setup optimizer
         self.optimizer = Adam(
             self.model.parameters(),
-            lr=float(config.get('learning_rate', 2e-4)),
-            betas=(config.get('beta1', 0.9), config.get('beta2', 0.999))
+            lr=float(config.get('training', {}).get('learning_rate', 2e-4)),
+            betas=(float(config.get('training', {}).get('beta1', 0.9)), float(config.get('training', {}).get('beta2', 0.999)))
         )
         
         # Setup learning rate scheduler
@@ -145,38 +145,45 @@ class DDPMTrainer:
         
         if scheduler_config:
             scheduler_type = scheduler_config.get('type', 'cosine')
-            warmup_steps = scheduler_config.get('warmup_steps', 0)
-            min_lr = scheduler_config.get('min_lr', 1e-6)
+            total_steps = int(len(train_loader) * config.get('training', {}).get('num_epochs', 500))
+            warmup_steps = int(scheduler_config.get('warmup_steps', 0))
+            min_lr = float(scheduler_config.get('min_lr', 1e-6))
             
             if scheduler_type == 'cosine':
-                cycle_length = scheduler_config.get('cycle_length', 50)
-                cycle_mult = scheduler_config.get('cycle_mult', 2)
-                self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                     self.optimizer,
-                    T_0=cycle_length,
-                    T_mult=cycle_mult,
+                    T_max=int(total_steps - warmup_steps),
                     eta_min=min_lr
                 )
             elif scheduler_type == 'linear':
-                total_steps = len(train_loader) * config.get('training', {}).get('num_epochs', 500)
                 def lr_lambda(step):
                     if step < warmup_steps:
                         return float(step) / float(max(1, warmup_steps))
                     return max(0.0, float(total_steps - step) / float(max(1, total_steps - warmup_steps)))
                 self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
             elif scheduler_type == 'step':
-                step_size = scheduler_config.get('step_size', 100)
-                gamma = scheduler_config.get('gamma', 0.1)
+                step_size = int(scheduler_config.get('step_size', total_steps // 4))  # Default to 4 steps
+                gamma = float(scheduler_config.get('gamma', 0.1))
                 self.scheduler = torch.optim.lr_scheduler.StepLR(
                     self.optimizer,
                     step_size=step_size,
                     gamma=gamma
                 )
             elif scheduler_type == 'exponential':
-                gamma = scheduler_config.get('gamma', 0.95)
+                gamma = float(scheduler_config.get('gamma', 0.95))
                 self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
                     self.optimizer,
                     gamma=gamma
+                )
+            elif scheduler_type == 'one_cycle':
+                max_lr = float(config.get('training', {}).get('learning_rate', 2e-4))
+                self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                    self.optimizer,
+                    max_lr=max_lr,
+                    total_steps=total_steps,
+                    pct_start=float(scheduler_config.get('pct_start', 0.3)),
+                    anneal_strategy='cos',
+                    final_div_factor=float(scheduler_config.get('final_div_factor', 1e4))
                 )
             else:
                 self.scheduler = None
@@ -195,7 +202,7 @@ class DDPMTrainer:
         # Setup directories and logging (only on rank 0)
         if self.rank == 0:
             try:
-                self.output_dir = config.get('output_dir', 'outputs')
+                self.output_dir = config.get('output', {}).get('output_dir', 'outputs')
                 self.checkpoint_dir = os.path.join(self.output_dir, 'checkpoints')
                 self.sample_dir = os.path.join(self.output_dir, 'samples')
                 self.log_dir = os.path.join(self.output_dir, 'logs')
@@ -207,17 +214,17 @@ class DDPMTrainer:
                 # Initialize wandb if enabled
                 if config.get('logging', {}).get('use_wandb', False):
                     wandb.init(
-                        project=config.get('wandb_project', 'diffusion-models'),
+                        project=config.get('logging', {}).get('wandb_project', 'diffusion-models'),
                         name=f"{self.model_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                        group=config.get('group', 'default'),
+                        group=config.get('logging', {}).get('group', 'default'),
                         config={
                             **config,
                             'model_name': self.model_name,
                             'model_parameters': sum(p.numel() for p in model.parameters()),
                             'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
-                            'dataset': config.get('dataset', 'unknown'),
-                            'batch_size': config.get('batch_size', None),
-                            'image_size': config.get('image_size', None),
+                            'dataset': config.get('data', {}).get('dataset', 'unknown'),
+                            'batch_size': config.get('training', {}).get('batch_size', None),
+                            'image_size': config.get('data', {}).get('image_size', None),
                             'device': str(device)
                         }
                     )
@@ -239,11 +246,11 @@ class DDPMTrainer:
                         wandb.config.update({'scheduler': None}, allow_val_change=True)
                 
                 # Initialize TensorBoard if enabled
-                if config.get('use_tensorboard', False):
+                if config.get('logging', {}).get('use_tensorboard', False):
                     self.writer = SummaryWriter(
                         log_dir=os.path.join(
                             self.log_dir,
-                            f"{self.model_name}_{config.get('run_name', '')}"
+                            f"{self.model_name}"
                         )
                     )
                 else:
@@ -287,7 +294,25 @@ class DDPMTrainer:
         # Log to tensorboard if enabled
         if self.writer is not None:
             for name, value in metrics.items():
-                self.writer.add_scalar(name, value, step)
+                # Skip histogram values since they're not compatible with add_scalar
+                if not isinstance(value, (wandb.Histogram, dict)):
+                    self.writer.add_scalar(name, value, step)
+                else:
+                    # Handle histogram data
+                    if isinstance(value, wandb.Histogram):
+                        # Convert histogram data to tensor before logging
+                        hist_data = torch.tensor(value.histogram)
+                        self.writer.add_histogram(name, hist_data, step)
+                    elif isinstance(value, dict) and any('hist' in k for k in value.keys()):
+                        # Assuming histogram data is stored in tensor form
+                        for k, v in value.items():
+                            if 'hist' in k and isinstance(v, torch.Tensor):
+                                self.writer.add_histogram(k, v, step)
+                    elif isinstance(value, list):
+                        # Convert list data to tensor before logging
+                        list_data = torch.tensor(value)
+                        self.writer.add_histogram(name, list_data, step)
+                    
     
     def _log_model_gradients(self, step: int):
         """Log model gradients and weights statistics.
@@ -443,15 +468,15 @@ class DDPMTrainer:
             # Calculate validation interval to be roughly 10 times per epoch
             steps_per_epoch = len(self.train_loader)
             val_interval = max(1, min(
-                self.config.get('val_interval', steps_per_epoch // 10),
+                self.config.get('training', {}).get('val_interval', steps_per_epoch // 10),
                 steps_per_epoch
             ))
             
             # Log hyperparameters
             if self.rank == 0:
                 hparams = {
-                    'learning_rate': self.config.get('learning_rate', 2e-4),
-                    'batch_size': self.config.get('batch_size', None),
+                    'learning_rate': self.config.get('training', {}).get('learning_rate', 2e-4),
+                    'batch_size': self.config.get('training', {}).get('batch_size', None),
                     'num_epochs': num_epochs,
                     'val_interval': val_interval,
                     'model_name': self.model_name
@@ -494,12 +519,16 @@ class DDPMTrainer:
                     
                     # Update learning rate
                     if self.scheduler is not None:
-                        if isinstance(self.scheduler, torch.optim.lr_scheduler.CosineAnnealingWarmRestarts):
-                            self.scheduler.step(epoch + batch_idx / len(self.train_loader))
-                        elif isinstance(self.scheduler, (torch.optim.lr_scheduler.StepLR, torch.optim.lr_scheduler.ExponentialLR)):
-                            self.scheduler.step(epoch)
-                        else:
+                        # Step the scheduler based on its type
+                        if isinstance(self.scheduler, (
+                            torch.optim.lr_scheduler.OneCycleLR,
+                            torch.optim.lr_scheduler.LambdaLR
+                        )):
                             self.scheduler.step()
+                        else:
+                            # These schedulers should be stepped once per epoch
+                            if batch_idx == len(self.train_loader) - 1:
+                                self.scheduler.step()
                     
                     # Update metrics
                     total_loss += loss.item()
@@ -522,7 +551,7 @@ class DDPMTrainer:
                         self._log_metrics(train_metrics, step=global_step)
     
                         # Log additional metrics periodically
-                        if global_step % self.config.get('logging', {}).get('gradient_logging_freq', 100) == 0:
+                        if (global_step + 1) % self.config.get('logging', {}).get('gradient_logging_freq', 100) == 0:
                             self._log_model_gradients(global_step)
                             self._log_optimizer_stats(global_step)
                             model = self.model.module if self.is_distributed else self.model

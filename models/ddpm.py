@@ -353,6 +353,7 @@ class UNet(nn.Module):
         
         # Initial convolution
         self.initial_conv = nn.Conv2d(in_channels, model_channels, kernel_size=3, padding='same')
+        nn.init.kaiming_normal_(self.initial_conv.weight)
         
         # Time embedding
         self.positional_encoding = nn.Sequential(
@@ -361,6 +362,12 @@ class UNet(nn.Module):
             nn.GELU(),
             nn.Linear(model_channels * 4, model_channels * 4)
         )
+        
+        # Initialize time embedding layers
+        for layer in self.positional_encoding:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
         
         # Downsampling path with attention
         self.down_blocks = nn.ModuleList([
@@ -439,8 +446,10 @@ class UNet(nn.Module):
             h = torch.cat([h, skip], dim=1)
             h = block(h, t_emb)
         
-        # Output
-        return self.output_conv(h)
+        # Output with final normalization
+        out = self.output_conv(h)
+        
+        return out
 
 class DDPM(BaseDiffusion):
     """Denoising Diffusion Probabilistic Model implementation.
@@ -494,8 +503,8 @@ class DDPM(BaseDiffusion):
         
         # Setup loss function
         self.loss_fn = DiffusionLoss(
-            loss_type=config.get('model_config', {}).get('loss_type', 'mse'),
-            loss_config=config.get('model_config', {}).get('loss_config', {})
+            loss_type=config.get('loss_type', 'mse'),
+            loss_config=config.get('loss_config', {})
         )
     
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -529,7 +538,7 @@ class DDPM(BaseDiffusion):
         
         # Sample timesteps
         t = torch.randint(0, self.num_timesteps, (batch_size,), device=x.device)
-        
+                
         # Generate noise
         noise = torch.randn_like(x)
         
