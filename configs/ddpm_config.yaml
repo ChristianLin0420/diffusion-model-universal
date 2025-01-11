@@ -75,7 +75,7 @@ data:
 logging:
   # Weights & Biases Configuration
   use_wandb: true
-  wandb_project: "testing"
+  wandb_project: "diffusion-models"
   wandb_entity: null  # Your wandb username/entity
   group: "${data.dataset}_comparison"  # Dataset-specific group for comparing models
   tags: ["ddpm", "baseline", "${data.dataset}"]  # Tags for organizing runs
