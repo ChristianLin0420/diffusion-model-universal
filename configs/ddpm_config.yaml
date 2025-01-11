@@ -13,6 +13,35 @@ model_config:
   num_res_blocks: 2
   attention_resolutions: [16]
   dropout: 0.1
+  loss_type: "mse"  # Options: mse, l1, huber, hybrid
+  loss_config:
+    # MSE Loss Configuration
+    mse_weight: 1.0
+    
+    # L1 Loss Configuration
+    l1_weight: 0.0
+    
+    # Huber Loss Configuration
+    huber_weight: 0.0
+    huber_delta: 1.0  # Delta parameter for Huber loss
+    
+    # Hybrid Loss Configuration (combination of losses)
+    use_hybrid: false  # Whether to use hybrid loss
+    hybrid_weights:  # Weights for different loss components
+      mse: 1.0
+      l1: 0.0
+      huber: 0.0
+    
+    # Time-dependent weighting
+    use_time_weighting: true  # Whether to use time-dependent loss weighting
+    time_weight_type: "snr"  # Options: snr, linear, inverse
+    time_weight_params:
+      min_weight: 0.1
+      max_weight: 1.0
+    
+    # Additional Loss Components
+    perceptual_weight: 0.0  # Weight for perceptual loss (if used)
+    adversarial_weight: 0.0  # Weight for adversarial loss (if used)
 
 # Training Configuration
 training:

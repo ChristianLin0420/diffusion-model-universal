@@ -494,8 +494,8 @@ class DDPM(BaseDiffusion):
         
         # Setup loss function
         self.loss_fn = DiffusionLoss(
-            loss_type=config.get('loss_type', 'mse'),
-            loss_config=config.get('loss_config', None)
+            loss_type=config.get('model_config', {}).get('loss_type', 'mse'),
+            loss_config=config.get('model_config', {}).get('loss_config', {})
         )
     
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:

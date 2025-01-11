@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Dict, Callable
+from torchvision.models import vgg16
+from torchvision.transforms import Normalize
 
 class DiffusionLoss:
     """Flexible loss module for diffusion models."""
@@ -14,12 +16,22 @@ class DiffusionLoss:
     }
     
     def __init__(self, loss_type: str = 'mse', loss_config: Optional[Dict] = None):
-        """
-        Initialize loss function.
+        """Initialize loss function with comprehensive configuration.
         
         Args:
             loss_type: Type of loss ('mse', 'l1', 'huber', 'hybrid')
-            loss_config: Additional configuration for loss function
+            loss_config: Additional configuration for loss function including:
+                - mse_weight: Weight for MSE loss
+                - l1_weight: Weight for L1 loss
+                - huber_weight: Weight for Huber loss
+                - huber_delta: Delta parameter for Huber loss
+                - use_hybrid: Whether to use hybrid loss
+                - hybrid_weights: Weights for different loss components
+                - use_time_weighting: Whether to use time-dependent weighting
+                - time_weight_type: Type of time weighting (snr, linear, inverse)
+                - time_weight_params: Parameters for time weighting
+                - perceptual_weight: Weight for perceptual loss
+                - adversarial_weight: Weight for adversarial loss
         """
         self.loss_type = loss_type.lower()
         self.loss_config = loss_config or {}
@@ -27,14 +39,41 @@ class DiffusionLoss:
         if self.loss_type not in self.LOSS_TYPES:
             raise ValueError(f"Unsupported loss type: {loss_type}")
         
-        # Special handling for hybrid loss
-        if self.loss_type == 'hybrid':
-            self.loss_weights = self.loss_config.get('weights', {'mse': 0.5, 'l1': 0.5})
+        # Initialize loss weights
+        self.mse_weight = self.loss_config.get('mse_weight', 1.0)
+        self.l1_weight = self.loss_config.get('l1_weight', 0.0)
+        self.huber_weight = self.loss_config.get('huber_weight', 0.0)
+        self.huber_delta = self.loss_config.get('huber_delta', 1.0)
+        
+        # Setup hybrid loss if enabled
+        self.use_hybrid = self.loss_config.get('use_hybrid', False)
+        if self.use_hybrid:
+            weights = self.loss_config.get('hybrid_weights', {})
+            self.hybrid_weights = {
+                'mse': weights.get('mse', 1.0),
+                'l1': weights.get('l1', 0.0),
+                'huber': weights.get('huber', 0.0)
+            }
+        
+        # Setup time-dependent weighting
+        self.use_time_weighting = self.loss_config.get('use_time_weighting', True)
+        self.time_weight_type = self.loss_config.get('time_weight_type', 'snr')
+        self.time_weight_params = self.loss_config.get('time_weight_params', {
+            'min_weight': 0.1,
+            'max_weight': 1.0
+        })
+        
+        # Setup additional loss components
+        self.perceptual_weight = self.loss_config.get('perceptual_weight', 0.0)
+        self.adversarial_weight = self.loss_config.get('adversarial_weight', 0.0)
+        
+        # Initialize perceptual loss if needed
+        if self.perceptual_weight > 0:
+            self.perceptual_loss = PerceptualLoss()
     
     def __call__(self, pred: torch.Tensor, target: torch.Tensor, 
                  timesteps: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Calculate loss between prediction and target.
+        """Calculate loss between prediction and target.
         
         Args:
             pred: Predicted values
@@ -44,45 +83,118 @@ class DiffusionLoss:
         Returns:
             Calculated loss value
         """
-        if self.loss_type == 'hybrid':
-            return self._compute_hybrid_loss(pred, target, timesteps)
+        # Calculate base loss
+        if self.use_hybrid:
+            base_loss = self._compute_hybrid_loss(pred, target)
+        else:
+            base_loss = self._compute_single_loss(pred, target)
         
-        loss_fn = self.LOSS_TYPES[self.loss_type]
-        reduction = self.loss_config.get('reduction', 'mean')
-        
-        # Apply time-dependent weighting if provided
-        if timesteps is not None and 'time_weights' in self.loss_config:
+        # Apply time-dependent weighting if enabled
+        if self.use_time_weighting and timesteps is not None:
             weights = self._get_time_weights(timesteps)
-            loss = loss_fn(pred, target, reduction='none')
-            return (loss * weights).mean()
+            base_loss = base_loss * weights
         
-        return loss_fn(pred, target, reduction=reduction)
+        # Add perceptual loss if enabled
+        if self.perceptual_weight > 0:
+            perceptual_loss = self.perceptual_loss(pred, target)
+            base_loss = base_loss + self.perceptual_weight * perceptual_loss
+        
+        # Take mean of all losses
+        return base_loss.mean()
     
-    def _compute_hybrid_loss(self, pred: torch.Tensor, target: torch.Tensor,
-                           timesteps: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _compute_single_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Compute loss using a single loss function."""
+        if self.loss_type == 'mse':
+            return self.mse_weight * F.mse_loss(pred, target, reduction='none')
+        elif self.loss_type == 'l1':
+            return self.l1_weight * F.l1_loss(pred, target, reduction='none')
+        elif self.loss_type == 'huber':
+            return self.huber_weight * F.smooth_l1_loss(pred, target, reduction='none', beta=self.huber_delta)
+        else:
+            raise ValueError(f"Unsupported single loss type: {self.loss_type}")
+    
+    def _compute_hybrid_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Compute hybrid loss combining multiple loss functions."""
-        total_loss = 0
-        for loss_type, weight in self.loss_weights.items():
-            if loss_type not in self.LOSS_TYPES or loss_type == 'hybrid':
-                continue
-            loss = self.LOSS_TYPES[loss_type](pred, target, reduction='mean')
-            total_loss += weight * loss
+        total_loss = torch.zeros_like(pred)
+        
+        if self.hybrid_weights['mse'] > 0:
+            total_loss += self.hybrid_weights['mse'] * F.mse_loss(pred, target, reduction='none')
+        
+        if self.hybrid_weights['l1'] > 0:
+            total_loss += self.hybrid_weights['l1'] * F.l1_loss(pred, target, reduction='none')
+        
+        if self.hybrid_weights['huber'] > 0:
+            total_loss += self.hybrid_weights['huber'] * F.smooth_l1_loss(
+                pred, target, reduction='none', beta=self.huber_delta
+            )
+        
         return total_loss
     
     def _get_time_weights(self, timesteps: torch.Tensor) -> torch.Tensor:
-        """Get time-dependent weights for loss calculation."""
-        time_weight_type = self.loss_config['time_weights'].get('type', 'linear')
-        max_timesteps = self.loss_config['time_weights'].get('max_timesteps', 1000)
+        """Get time-dependent weights for loss calculation.
         
-        if time_weight_type == 'linear':
-            weights = 1 - (timesteps.float() / max_timesteps)
-        elif time_weight_type == 'exponential':
-            beta = self.loss_config['time_weights'].get('beta', 0.1)
-            weights = torch.exp(-beta * timesteps.float())
+        Supports multiple weighting schemes:
+        - SNR: Signal-to-Noise Ratio based weighting
+        - Linear: Linear interpolation between min and max weights
+        - Inverse: Inverse time weighting
+        """
+        min_weight = self.time_weight_params['min_weight']
+        max_weight = self.time_weight_params['max_weight']
+        
+        if self.time_weight_type == 'snr':
+            # SNR-based weighting (commonly used in diffusion models)
+            alphas = torch.cos(timesteps.float() * torch.pi / 2)  # Simplified SNR curve
+            weights = alphas ** 2 / (1 - alphas ** 2)
+        elif self.time_weight_type == 'linear':
+            # Linear interpolation
+            weights = 1 - (timesteps.float() / timesteps.max())
+        elif self.time_weight_type == 'inverse':
+            # Inverse time weighting
+            weights = 1 / (timesteps.float() + 1)
         else:
             weights = torch.ones_like(timesteps, dtype=torch.float)
         
+        # Scale weights to [min_weight, max_weight]
+        weights = min_weight + (max_weight - min_weight) * (
+            (weights - weights.min()) / (weights.max() - weights.min())
+        )
+        
         return weights.view(-1, 1, 1, 1)
+
+class PerceptualLoss(nn.Module):
+    """Perceptual loss using VGG16 features."""
+    
+    def __init__(self, layer_weights: Optional[Dict[str, float]] = None):
+        super().__init__()
+        self.vgg = vgg16(pretrained=True).features.eval()
+        self.normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        
+        # Default layer weights if none provided
+        self.layer_weights = layer_weights or {
+            '3': 1.0,   # relu1_2
+            '8': 1.0,   # relu2_2
+            '15': 1.0,  # relu3_3
+        }
+        
+        for param in self.vgg.parameters():
+            param.requires_grad = False
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Calculate perceptual loss between prediction and target."""
+        # Normalize inputs
+        pred = self.normalize(pred)
+        target = self.normalize(target)
+        
+        # Get features and calculate loss
+        loss = 0
+        for name, module in self.vgg.named_children():
+            pred = module(pred)
+            target = module(target)
+            
+            if name in self.layer_weights:
+                loss += self.layer_weights[name] * F.mse_loss(pred, target)
+        
+        return loss
 
 class ScoreMatchingLoss(nn.Module):
     """Score matching loss for score-based diffusion models."""
