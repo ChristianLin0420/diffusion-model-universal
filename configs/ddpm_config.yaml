@@ -43,7 +43,7 @@ model_config:
 
 # Training Configuration
 training:
-  num_epochs: 2
+  num_epochs: 1000
   batch_size: 128
   learning_rate: 2e-4
   beta1: 0.9
@@ -71,7 +71,7 @@ data:
 
 # Benchmark Configuration
 benchmark:
-  n_samples: 500  # Number of samples to generate for evaluation
+  n_samples: 10000  # Number of samples to generate for evaluation
   batch_size: 128  # Batch size for generation and evaluation
   metrics:
     fid: true  # Calculate FID score
