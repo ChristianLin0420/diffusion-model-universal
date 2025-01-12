@@ -5,9 +5,10 @@ A comprehensive PyTorch-based framework for training and experimenting with vari
 ## Features
 
 ### Multiple Model Implementations
-- **DDPM (Denoising Diffusion Probabilistic Models)**
+- **[DDPM (Denoising Diffusion Probabilistic Models)](docs/ddpm.md)**
   - Standard diffusion model with forward and reverse processes
   - Configurable noise schedule
+  - [Detailed Documentation](docs/ddpm.md)
   
 - **DDIM (Denoising Diffusion Implicit Models)**
   - Accelerated sampling with fewer steps

@@ -9,9 +9,7 @@ model_config:
   image_size: 32
   image_channels: 3
   hidden_channels: 128
-  channel_multipliers: [1, 2, 2, 2]
-  num_res_blocks: 2
-  attention_resolutions: [16]
+  num_res_blocks: 3
   dropout: 0.1
   loss_type: "mse"  # Options: mse, l1, huber, hybrid
   loss_config:
@@ -45,7 +43,7 @@ model_config:
 
 # Training Configuration
 training:
-  num_epochs: 500
+  num_epochs: 2
   batch_size: 128
   learning_rate: 2e-4
   beta1: 0.9
@@ -71,11 +69,26 @@ data:
   data_dir: "data"
   num_workers: 4
 
+# Benchmark Configuration
+benchmark:
+  n_samples: 500  # Number of samples to generate for evaluation
+  batch_size: 128  # Batch size for generation and evaluation
+  metrics:
+    fid: true  # Calculate FID score
+    inception_score: true  # Calculate Inception Score
+    ssim: true  # Calculate SSIM
+    psnr: true  # Calculate PSNR
+  save_samples: true  # Save generated samples
+  save_metrics: true  # Save computed metrics
+  sample_dir: "benchmark_samples"  # Directory to save samples
+  results_file: "benchmark_results.json"  # File to save metrics
+
+
 # Logging Configuration
 logging:
   # Weights & Biases Configuration
   use_wandb: true
-  wandb_project: "diffusion-models"
+  wandb_project: "testing"
   wandb_entity: null  # Your wandb username/entity
   group: "${data.dataset}_comparison"  # Dataset-specific group for comparing models
   tags: ["ddpm", "baseline", "${data.dataset}"]  # Tags for organizing runs

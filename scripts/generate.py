@@ -112,7 +112,7 @@ def main():
     print(f'Generating {args.num_samples} samples...')
     with torch.no_grad():
         # Generate samples
-        samples = model.sample(args.num_samples, device)
+        samples = model.generate_sample(args.num_samples, device)
         
         # Save individual samples
         for i, sample in enumerate(samples):

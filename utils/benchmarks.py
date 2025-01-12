@@ -39,7 +39,7 @@ class InceptionStatistics:
     def __init__(self, device: torch.device, use_fid: bool = True):
         """Initialize the Inception model and preprocessing."""
         self.device = device
-        self.model = inception_v3(pretrained=True, transform_input=True).to(device)
+        self.model = inception_v3(weights="Inception_V3_Weights.DEFAULT", transform_input=True).to(device)
         self.model.eval()
         
         if use_fid:
@@ -84,20 +84,31 @@ def calculate_fid(real_features: torch.Tensor, fake_features: torch.Tensor) -> f
     Returns:
         float: The calculated FID score (lower is better).
     """
-    # Calculate mean and covariance
+    # Ensure features are in correct shape (keeping on GPU)
+    real_features = real_features.view(real_features.size(0), -1)
+    fake_features = fake_features.view(fake_features.size(0), -1)
+    
+    # Calculate mean and covariance statistics on GPU
     mu1, sigma1 = real_features.mean(dim=0), torch_cov(real_features)
     mu2, sigma2 = fake_features.mean(dim=0), torch_cov(fake_features)
     
-    # Calculate FID
+    # Calculate FID on GPU
     diff = mu1 - mu2
-    covmean = linalg.sqrtm(sigma1.cpu().numpy() @ sigma2.cpu().numpy())
     
-    if np.iscomplexobj(covmean):
-        covmean = covmean.real
+    # Calculate matrix square root and trace using PyTorch
+    product = sigma1 @ sigma2
     
-    fid = diff.dot(diff) + torch.trace(sigma1) + torch.trace(sigma2) - 2 * torch.trace(torch.from_numpy(covmean).to(sigma1.device))
+    # Use eigendecomposition for matrix square root
+    eigenvalues, eigenvectors = torch.linalg.eigh(product)
+    # Ensure numerical stability
+    eigenvalues = torch.clamp(eigenvalues, min=1e-8)
+    sqrt_eigenvalues = torch.sqrt(eigenvalues)
+    covmean = eigenvectors @ torch.diag(sqrt_eigenvalues) @ eigenvectors.T
     
-    return float(fid)
+    # Calculate trace
+    tr_covmean = torch.trace(covmean)
+    
+    return float(diff.dot(diff) + torch.trace(sigma1) + torch.trace(sigma2) - 2 * tr_covmean)
 
 def calculate_inception_score(features: torch.Tensor, splits: int = 10) -> Tuple[float, float]:
     """Calculate Inception Score for generated images.
@@ -128,7 +139,8 @@ def calculate_inception_score(features: torch.Tensor, splits: int = 10) -> Tuple
         split_score = torch.exp(kl.sum(dim=1).mean())
         scores.append(split_score.item())
     
-    return float(np.mean(scores)), float(np.std(scores))
+    scores_tensor = torch.tensor(scores, device=features.device)
+    return float(scores_tensor.mean()), float(scores_tensor.std())
 
 def torch_cov(m: torch.Tensor) -> torch.Tensor:
     """Calculate covariance matrix using PyTorch.
@@ -139,10 +151,16 @@ def torch_cov(m: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: Covariance matrix [D, D].
     """
-    fact = 1.0 / (m.size(0) - 1)
-    m = m - torch.mean(m, dim=0)
-    mt = m.t()
-    return fact * m.matmul(mt)
+    # Ensure input is 2D
+    if m.dim() > 2:
+        m = m.view(m.size(0), -1)
+    
+    # Center the features
+    m = m - m.mean(dim=0, keepdim=True)
+    
+    # Calculate covariance
+    factor = 1.0 / (m.size(0) - 1)
+    return factor * m.t() @ m
 
 class DiffusionBenchmark:
     """Comprehensive benchmarking suite for diffusion models.
@@ -220,9 +238,11 @@ class DiffusionBenchmark:
         generated_images = []
         n_batches = self.n_samples // self.batch_size
         
+        print(f"Generating {n_batches} batches of {self.batch_size} samples")
+        
         for _ in tqdm(range(n_batches)):
             # Generate samples
-            samples = model.sample(self.batch_size, self.device)
+            samples = model.generate_samples(self.batch_size, self.device)
             features = self.inception_stats.get_features(samples)
             fake_features.append(features.cpu())
             generated_images.append(samples.cpu())

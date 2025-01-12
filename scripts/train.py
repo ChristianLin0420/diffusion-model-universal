@@ -169,15 +169,15 @@ def train_process(rank: int, world_size: int, args: argparse.Namespace):
             print("Running benchmarks...")
             benchmark = DiffusionBenchmark(
                 device=device,
-                n_samples=config.get('benchmark', {}).get('n_samples', 50000),
+                n_samples=config.get('benchmark', {}).get('n_samples', 2000),
                 batch_size=config['training']['batch_size']
             )
             
             metrics = benchmark.evaluate(model, test_loader)
             
             # Save benchmark results
-            output_dir = Path(config['logging']['output_dir'])
-            benchmark_path = output_dir / 'benchmark_results.json'
+            output_dir = Path(config.get('output', {}).get('output_dir', 'outputs/ddpm'))
+            benchmark_path = output_dir / config.get('benchmark', {}).get('results_file', 'benchmark_results.json')
             
             print("\nBenchmark Results:")
             print(f"FID Score: {metrics['fid']:.2f}")

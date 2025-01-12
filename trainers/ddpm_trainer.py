@@ -31,7 +31,6 @@ from typing import Dict, Optional
 import time
 
 from utils.config_utils import print_config
-
 class DDPMTrainer:
     """Trainer class for DDPM models.
     
@@ -102,9 +101,9 @@ class DDPMTrainer:
             RuntimeError: If directories cannot be created or initialized.
         """
         # Verify model has required methods
-        if not hasattr(model, 'loss_function') or not hasattr(model, 'sample'):
+        if not hasattr(model, 'loss_function') or not hasattr(model, 'generate_samples'):
             raise AttributeError(
-                "Model must implement 'loss_function' and 'sample' methods"
+                "Model must implement 'loss_function' and 'generate_samples' methods"
             )
         
         self.rank = rank
@@ -118,6 +117,14 @@ class DDPMTrainer:
         
         # Move model to device
         self.model = model.to(device)
+        
+        # Initialize EMA model if enabled
+        self.ema_decay = config.get('training', {}).get('ema_decay', 0.9999)
+        if self.ema_decay > 0:
+            self.ema_model = self._copy_model_to_ema()
+            self.ema_model.eval()
+        else:
+            self.ema_model = None
         
         # Wrap model with DDP if using distributed training
         if self.is_distributed:
@@ -446,6 +453,30 @@ class DDPMTrainer:
             }
             self._log_metrics(metrics, step=step)
     
+    def _copy_model_to_ema(self) -> nn.Module:
+        """Create a copy of the model for EMA."""
+        ema_model = type(self.model)(self.config['model_config'])
+        ema_model.load_state_dict(self.model.state_dict())
+        ema_model = ema_model.to(self.device)
+        return ema_model
+    
+    def _update_ema_model(self):
+        """Update EMA model parameters."""
+        if self.ema_model is None:
+            return
+            
+        with torch.no_grad():
+            model_params = dict(self.model.named_parameters())
+            ema_params = dict(self.ema_model.named_parameters())
+            
+            for name, param in model_params.items():
+                if name in ema_params:
+                    print(f"Updating EMA for {name}")
+                    # Update EMA parameter
+                    ema_params[name].data.mul_(self.ema_decay).add_(
+                        param.data, alpha=(1 - self.ema_decay)
+                    )
+    
     def train(self, num_epochs: int):
         """Train the DDPM model.
         
@@ -516,6 +547,10 @@ class DDPMTrainer:
                     # Backward pass
                     loss.backward()
                     self.optimizer.step()
+                    
+                    # Update EMA model
+                    if self.ema_model is not None:
+                        self._update_ema_model()
                     
                     # Update learning rate
                     if self.scheduler is not None:
@@ -642,6 +677,7 @@ class DDPMTrainer:
                 all processes.
         """
         self.model.eval()
+        
         total_loss = 0.0
         num_batches = 0
         
@@ -770,8 +806,10 @@ class DDPMTrainer:
             
         self.model.eval()
         with torch.no_grad():
-            # Get model (handle DDP case)
-            model = self.model.module if self.is_distributed else self.model
+            # Use EMA model for sampling if available
+            model = self.ema_model if self.ema_model is not None else (
+                self.model.module if self.is_distributed else self.model
+            )
             
             # Generate samples with intermediate steps
             intermediate_samples = model.generate_samples_with_intermediates(
@@ -831,6 +869,7 @@ class DDPMTrainer:
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.module.state_dict() if self.is_distributed else self.model.state_dict(),
+            'ema_model_state_dict': self.ema_model.state_dict() if self.ema_model is not None else None,
             'optimizer_state_dict': self.optimizer.state_dict(),
             'config': self.config,
             'best_val_loss': self.best_val_loss,
@@ -870,6 +909,10 @@ class DDPMTrainer:
             self.model.module.load_state_dict(checkpoint['model_state_dict'])
         else:
             self.model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Load EMA model if available
+        if self.ema_model is not None and checkpoint.get('ema_model_state_dict') is not None:
+            self.ema_model.load_state_dict(checkpoint['ema_model_state_dict'])
             
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
@@ -893,8 +936,8 @@ class DDPMTrainer:
             if self.writer is not None:
                 self.writer.close()
         
-        if self.is_distributed:
-            dist.destroy_process_group()
+        # if self.is_distributed:
+        #     dist.destroy_process_group()
     
     def __del__(self):
         """Destructor to ensure cleanup is performed."""

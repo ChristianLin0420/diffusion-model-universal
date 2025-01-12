@@ -97,7 +97,7 @@ class BaseDiffusion(nn.Module, ABC):
         raise NotImplementedError
     
     @abstractmethod
-    def sample(self, batch_size: int, device: torch.device) -> torch.Tensor:
+    def generate_samples(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Generate samples from the model.
         
         This method should be implemented by all subclasses to define

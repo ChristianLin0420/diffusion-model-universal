@@ -78,7 +78,7 @@ class DDIMTrainer(DDPMTrainer):
             if self.is_distributed:
                 samples = self.model.module.sample(num_samples, self.device)
             else:
-                samples = self.model.sample(num_samples, self.device)
+                samples = self.model.generate_sample(num_samples, self.device)
             
             # Save samples using parent class method
             self._save_samples(samples, epoch) 
