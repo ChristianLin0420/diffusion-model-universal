@@ -1,7 +1,7 @@
 # DDIM Model Configuration
 
 # Model Configuration
-model_name: "DDIM"  # Name of the model for logging
+model_name: "DDIM"  # Override DDPM name
 model_config:
   time_steps: 1000
   beta_start: 0.0001
@@ -9,67 +9,112 @@ model_config:
   image_size: 32
   image_channels: 3
   hidden_channels: 128
-  channel_multipliers: [1, 2, 2, 2]
-  num_res_blocks: 2
-  attention_resolutions: [16]
+  num_res_blocks: 3
   dropout: 0.1
-  ddim_sampling_eta: 0.0  # DDIM-specific parameter
-  ddim_steps: 50  # Number of DDIM sampling steps
+  loss_type: "mse"
+  
+  # DDIM-specific parameters
+  ddim_sampling_steps: 50  # Number of steps for DDIM sampling
+  ddim_discretize_method: "uniform"  # Method to select timesteps: uniform or quad
+  eta: 0.0  # 0 for deterministic sampling, >0 for stochastic
+  
+  loss_config:
+    mse_weight: 1.0
+    l1_weight: 0.0
+    huber_weight: 0.0
+    huber_delta: 1.0
+    use_hybrid: false
+    hybrid_weights:
+      mse: 1.0
+      l1: 0.0
+      huber: 0.0
+    use_time_weighting: true
+    time_weight_type: "snr"
+    time_weight_params:
+      min_weight: 0.1
+      max_weight: 1.0
+    perceptual_weight: 0.0
+    adversarial_weight: 0.0
 
 # Training Configuration
 training:
-  num_epochs: 500
-  batch_size: 64
+  num_epochs: 5
+  batch_size: 128
   learning_rate: 2e-4
   beta1: 0.9
   beta2: 0.999
   ema_decay: 0.9999
-  val_interval: 1000  # Steps between validation
-  sample_interval: 5  # Epochs between sample generation
-  checkpoint_interval: 10  # Epochs between checkpoints
+  scheduler:
+    type: "cosine"
+    warmup_steps: 1000
+    min_lr: 1e-6
+    gamma: 0.1
+    step_size: 100
+    cycle_length: 50
+    cycle_mult: 2
+  val_interval: 1000
+  sample_interval: 5
+  checkpoint_interval: 10
 
 # Data Configuration
 data:
-  dataset: "CIFAR10"  # Dataset name for logging
+  dataset: "CIFAR10"
   image_size: 32
   channels: 3
   data_dir: "data"
   num_workers: 4
 
+# Benchmark Configuration
+benchmark:
+  n_samples: 500
+  batch_size: 128
+  metrics:
+    fid: true
+    inception_score: true
+    ssim: true
+    psnr: true
+  save_samples: true
+  save_metrics: true
+  sample_dir: "benchmark_samples"
+  results_file: "benchmark_results.json"
+
 # Logging Configuration
 logging:
-  # Weights & Biases Configuration
   use_wandb: true
-  wandb_project: "diffusion-models"
-  wandb_entity: null  # Your wandb username/entity
-  group: "${data.dataset}_comparison"  # Dataset-specific group for comparing models
-  tags: ["ddim", "fast_sampling", "${data.dataset}"]  # Tags for organizing runs
-  notes: "DDIM model with fast sampling on ${data.dataset}"  # Run description
-  
-  # TensorBoard Configuration
-  use_tensorboard: true
+  wandb_project: "testing"
+  wandb_entity: null
+  group: "${data.dataset}_comparison"
+  tags: ["ddim", "baseline", "${data.dataset}"]  # Changed from ddpm to ddim
+  notes: "DDIM baseline model training on ${data.dataset}"  # Changed from DDPM to DDIM
+  use_tensorboard: false
   tensorboard_dir: "logs"
-  
-  # Metric Tracking
-  track_grad_norm: true  # Track gradient norms
-  track_memory_usage: true  # Track GPU memory usage
-  track_samples: true  # Track generated samples
-  sample_visualization_frequency: 1000  # Steps between sample visualizations
-  
-  # DDIM-specific Tracking
-  track_sampling_steps: true  # Track number of sampling steps
-  track_sampling_time: true  # Track sampling time
+  track_grad_norm: true
+  track_memory_usage: true
+  track_samples: true
+  gradient_logging_freq: 100
+  sample_visualization_frequency: 1000
+  track_per_layer_metrics: true
+  track_parameter_histograms: true
+  track_optimizer_stats: true
+  track_batch_stats: true
+  track_time_metrics: true
+  track_gpu_stats: true
+  track_throughput: true
+  track_noise_schedule: true
+  track_sample_quality: true
+  track_beta_schedule: true
+  track_timestep_embeddings: true
 
 # Output Configuration
 output:
-  output_dir: "outputs/ddim"
+  output_dir: "outputs/ddim"  # Changed from ddpm to ddim
   save_model: true
   save_optimizer: true
   save_best: true
   save_last: true
-  save_frequency: 10  # Save every N epochs
+  save_frequency: 10
 
 # Distributed Training
 distributed:
   backend: "nccl"
-  find_unused_parameters: true 
+  find_unused_parameters: true
