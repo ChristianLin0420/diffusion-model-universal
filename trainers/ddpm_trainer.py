@@ -470,8 +470,10 @@ class DDPMTrainer:
             ema_params = dict(self.ema_model.named_parameters())
             
             for name, param in model_params.items():
-                if name in ema_params:
-                    print(f"Updating EMA for {name}")
+                if self.is_distributed:
+                    name = name.replace('module.', '')
+
+                if name in ema_params:  
                     # Update EMA parameter
                     ema_params[name].data.mul_(self.ema_decay).add_(
                         param.data, alpha=(1 - self.ema_decay)
@@ -806,10 +808,8 @@ class DDPMTrainer:
             
         self.model.eval()
         with torch.no_grad():
-            # Use EMA model for sampling if available
-            model = self.ema_model if self.ema_model is not None else (
-                self.model.module if self.is_distributed else self.model
-            )
+            # Use trained model for sampling
+            model = self.model.module if self.is_distributed else self.model
             
             # Generate samples with intermediate steps
             intermediate_samples = model.generate_samples_with_intermediates(

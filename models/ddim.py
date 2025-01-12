@@ -140,7 +140,6 @@ class DDIM(DDPM):
         
         # Start from pure noise
         x = torch.randn(shape, device=device)
-        x = x.clamp(-3, 3)  # Clip initial noise for stability
         
         # Iteratively denoise
         for i in range(len(self.ddim_timesteps) - 1, -1, -1):
@@ -150,17 +149,11 @@ class DDIM(DDPM):
                               device=device)
             
             x = self._ddim_sample(x, t, t_prev)
-            
-            # Add stability check
-            if torch.isnan(x).any():
-                print(f"NaN detected at step {i}")
-                x = torch.nan_to_num(x, nan=0.0)
-            x = x.clamp(-1, 1)  # Clip samples for stability
         
         return x
     
     def generate_samples_with_intermediates(
-        self, batch_size: int, device: torch.device, save_interval: int = 5
+        self, batch_size: int, device: torch.device, save_interval: int = 2
     ) -> List[torch.Tensor]:
         """Generate samples with intermediate steps using DDIM sampling.
         
@@ -174,14 +167,10 @@ class DDIM(DDPM):
         """
         shape = (batch_size, self.config['image_channels'], 
                 self.config['image_size'], self.config['image_size'])
-        
-        # Start from pure noise
         x = torch.randn(shape, device=device)
-        x = x.clamp(-3, 3)  # Clip initial noise
         
         # Store intermediate samples
-        samples = [x.clone()]
-        steps_per_save = max(len(self.ddim_timesteps) // save_interval, 1)
+        intermediate_samples = [x.clone()]
         
         # Iteratively denoise
         for i in range(len(self.ddim_timesteps) - 1, -1, -1):
@@ -192,14 +181,8 @@ class DDIM(DDPM):
             
             x = self._ddim_sample(x, t, t_prev)
             
-            # Add stability check
-            if torch.isnan(x).any():
-                print(f"NaN detected at step {i}")
-                x = torch.nan_to_num(x, nan=0.0)
-            x = x.clamp(-1, 1)
-            
             # Save intermediate sample
-            if i % steps_per_save == 0 or i == 0:
-                samples.append(x.clone())
+            if i % save_interval == 0 or i == 0:
+                intermediate_samples.append(x.clone())
         
-        return samples 
+        return intermediate_samples 

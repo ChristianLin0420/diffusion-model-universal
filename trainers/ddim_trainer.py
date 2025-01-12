@@ -44,10 +44,8 @@ class DDIMTrainer(DDPMTrainer):
             
         self.model.eval()
         with torch.no_grad():
-            # Use EMA model for sampling if available
-            model = self.ema_model if self.ema_model is not None else (
-                self.model.module if self.is_distributed else self.model
-            )
+            # Use trained model for sampling
+            model = self.model.module if self.is_distributed else self.model
             
             # Generate samples with intermediate steps
             intermediate_samples = model.generate_samples_with_intermediates(
@@ -72,13 +70,13 @@ class DDIMTrainer(DDPMTrainer):
             # Log samples
             if self.config.get('logging', {}).get('use_wandb', False):
                 wandb.log({
-                    f'{self.model_name}/ddim_denoising_process': wandb.Image(grid),
+                    f'{self.model_name}/denoising_process': wandb.Image(grid),
                     'epoch': epoch
                 })
             
             if self.writer is not None:
                 self.writer.add_image(
-                    f'{self.model_name}/ddim_denoising_process',
+                    f'{self.model_name}/denoising_process',
                     grid,
                     global_step=epoch
                 ) 
